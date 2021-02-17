@@ -2472,7 +2472,10 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
     CGF.EmitNounwindRuntimeCall(getGuardReleaseFn(CGM, guardPtrTy),
                                 guardAddr.getPointer());
   } else {
-    Builder.CreateStore(llvm::ConstantInt::get(guardTy, 1), guardAddr);
+    // Store 1 into the first byte of the guard variable after initialization is
+    // complete.
+    Builder.CreateStore(llvm::ConstantInt::get(CGM.Int8Ty, 1),
+                        Builder.CreateElementBitCast(guardAddr, CGM.Int8Ty));
   }
 
   CGF.EmitBlock(EndBlock);
@@ -3178,7 +3181,7 @@ static bool TypeInfoIsInStandardLibrary(const BuiltinType *Ty) {
 #define SVE_TYPE(Name, Id, SingletonId) \
     case BuiltinType::Id:
 #include "clang/Basic/AArch64SVEACLETypes.def"
-#define PPC_MMA_VECTOR_TYPE(Name, Id, Size) \
+#define PPC_VECTOR_TYPE(Name, Id, Size) \
     case BuiltinType::Id:
 #include "clang/Basic/PPCTypes.def"
     case BuiltinType::ShortAccum:

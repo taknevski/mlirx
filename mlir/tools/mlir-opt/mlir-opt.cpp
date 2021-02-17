@@ -47,6 +47,7 @@ void registerTestPrintDefUsePass();
 void registerTestPrintNestingPass();
 void registerTestReducer();
 void registerTestSpirvEntryPointABIPass();
+void registerTestSpirvGLSLCanonicalizationPass();
 void registerTestSpirvModuleCombinerPass();
 void registerTestTraitsPass();
 void registerTosaTestQuantUtilAPIPass();
@@ -59,6 +60,7 @@ void registerMemRefBoundCheck();
 void registerPatternsTestPass();
 void registerSimpleParametricTilingPass();
 void registerTestAffineLoopParametricTilingPass();
+void registerTestAliasAnalysisPass();
 void registerTestCallGraphPass();
 void registerTestConstantFold();
 void registerTestConvVectorization();
@@ -73,6 +75,7 @@ void registerTestGpuParallelLoopMappingPass();
 void registerTestInterfaces();
 void registerTestLinalgCodegenStrategy();
 void registerTestLinalgFusionTransforms();
+void registerTestLinalgTensorFusionTransforms();
 void registerTestLinalgGreedyFusion();
 void registerTestLinalgHoisting();
 void registerTestLinalgTileAndFuseSequencePass();
@@ -115,6 +118,7 @@ void registerTestPasses() {
   registerTestPrintNestingPass();
   registerTestReducer();
   registerTestSpirvEntryPointABIPass();
+  registerTestSpirvGLSLCanonicalizationPass();
   registerTestSpirvModuleCombinerPass();
   registerTestTraitsPass();
   registerVectorizerTestPass();
@@ -126,6 +130,7 @@ void registerTestPasses() {
   test::registerPatternsTestPass();
   test::registerSimpleParametricTilingPass();
   test::registerTestAffineLoopParametricTilingPass();
+  test::registerTestAliasAnalysisPass();
   test::registerTestCallGraphPass();
   test::registerTestConstantFold();
 #if MLIR_CUDA_CONVERSIONS_ENABLED
@@ -143,6 +148,7 @@ void registerTestPasses() {
   test::registerTestInterfaces();
   test::registerTestLinalgCodegenStrategy();
   test::registerTestLinalgFusionTransforms();
+  test::registerTestLinalgTensorFusionTransforms();
   test::registerTestLinalgGreedyFusion();
   test::registerTestLinalgHoisting();
   test::registerTestLinalgTileAndFuseSequencePass();

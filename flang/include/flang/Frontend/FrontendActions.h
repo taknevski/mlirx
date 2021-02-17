@@ -21,7 +21,39 @@ class InputOutputTestAction : public FrontendAction {
   void ExecuteAction() override;
 };
 
-class PrintPreprocessedAction : public FrontendAction {
+class EmitObjAction : public FrontendAction {
+  void ExecuteAction() override;
+};
+
+//===----------------------------------------------------------------------===//
+// Prescan Actions
+//===----------------------------------------------------------------------===//
+class PrescanAction : public FrontendAction {
+  void ExecuteAction() override = 0;
+  bool BeginSourceFileAction(CompilerInstance &ci) override;
+};
+
+class PrintPreprocessedAction : public PrescanAction {
+  void ExecuteAction() override;
+};
+
+//===----------------------------------------------------------------------===//
+// PrescanAndSema Actions
+//===----------------------------------------------------------------------===//
+class PrescanAndSemaAction : public FrontendAction {
+  void ExecuteAction() override = 0;
+  bool BeginSourceFileAction(CompilerInstance &ci) override;
+};
+
+class DebugUnparseWithSymbolsAction : public PrescanAndSemaAction {
+  void ExecuteAction() override;
+};
+
+class DebugUnparseAction : public PrescanAndSemaAction {
+  void ExecuteAction() override;
+};
+
+class ParseSyntaxOnlyAction : public PrescanAndSemaAction {
   void ExecuteAction() override;
 };
 

@@ -108,6 +108,7 @@ public:
   uint32_t getInputSectionOffset() const override {
     return segment.SectionOffset;
   }
+  uint64_t getVA() const;
 
   const OutputSegment *outputSeg = nullptr;
   int32_t outputSegmentOffset = 0;
@@ -221,7 +222,7 @@ public:
 
   StringRef getName() const override { return section.Name; }
   StringRef getDebugName() const override { return StringRef(); }
-  uint32_t getComdat() const override { return UINT32_MAX; }
+  uint32_t getComdat() const override { return section.Comdat; }
 
 protected:
   ArrayRef<uint8_t> data() const override { return section.Content; }

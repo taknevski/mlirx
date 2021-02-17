@@ -258,18 +258,18 @@ def AffineForOp : Affine_Op<"for",
 
     /// Returns loop step.
     int64_t getStep() {
-      return getAttr(getStepAttrName()).cast<IntegerAttr>().getInt();
+      return (*this)->getAttr(getStepAttrName()).cast<IntegerAttr>().getInt();
     }
 
     /// Returns affine map for the lower bound.
     AffineMap getLowerBoundMap() { return getLowerBoundMapAttr().getValue(); }
     AffineMapAttr getLowerBoundMapAttr() {
-      return getAttr(getLowerBoundAttrName()).cast<AffineMapAttr>();
+      return (*this)->getAttr(getLowerBoundAttrName()).cast<AffineMapAttr>();
     }
     /// Returns affine map for the upper bound. The upper bound is exclusive.
     AffineMap getUpperBoundMap() { return getUpperBoundMapAttr().getValue(); }
     AffineMapAttr getUpperBoundMapAttr() {
-      return getAttr(getUpperBoundAttrName()).cast<AffineMapAttr>();
+      return (*this)->getAttr(getUpperBoundAttrName()).cast<AffineMapAttr>();
     }
 
     /// Set lower bound. The new bound must have the same number of operands as
@@ -289,8 +289,8 @@ def AffineForOp : Affine_Op<"for",
     void setStep(int64_t step) {
       assert(step > 0 && "step has to be a positive integer constant");
       auto *context = getLowerBoundMap().getContext();
-      setAttr(Identifier::get(getStepAttrName(), context),
-              IntegerAttr::get(IndexType::get(context), step));
+      (*this)->setAttr(Identifier::get(getStepAttrName(), context),
+                       IntegerAttr::get(IndexType::get(context), step));
     }
 
     /// Returns number of region arguments for loop-carried values.
@@ -458,6 +458,7 @@ def AffineIfOp : Affine_Op<"if",
 class AffineLoadOpBase<string mnemonic, list<OpTrait> traits = []> :
     Affine_Op<mnemonic, !listconcat(traits,
         [DeclareOpInterfaceMethods<AffineReadOpInterface>,
+        DeclareOpInterfaceMethods<AffineMapAccessInterface>,
         MemRefsNormalizable])> {
   let arguments = (ins Arg<AnyMemRef, "the reference to load from",
       [MemRead]>:$memref,
@@ -471,7 +472,7 @@ class AffineLoadOpBase<string mnemonic, list<OpTrait> traits = []> :
 
     /// Returns the affine map used to index the memref for this operation.
     AffineMapAttr getAffineMapAttr() {
-      return getAttr(getMapAttrName()).cast<AffineMapAttr>();
+      return (*this)->getAttr(getMapAttrName()).cast<AffineMapAttr>();
     }
 
     static StringRef getMapAttrName() { return "map"; }
@@ -698,7 +699,8 @@ def AffineParallelOp : Affine_Op<"parallel",
   let hasFolder = 1;
 }
 
-def AffinePrefetchOp : Affine_Op<"prefetch"> {
+def AffinePrefetchOp : Affine_Op<"prefetch",
+  [DeclareOpInterfaceMethods<AffineMapAccessInterface>]> {
   let summary = "affine prefetch operation";
   let description = [{
     The "affine.prefetch" op prefetches data from a memref location described
@@ -749,12 +751,14 @@ def AffinePrefetchOp : Affine_Op<"prefetch"> {
     /// Returns the affine map used to index the memref for this operation.
     AffineMap getAffineMap() { return getAffineMapAttr().getValue(); }
     AffineMapAttr getAffineMapAttr() {
-      return getAttr(getMapAttrName()).cast<AffineMapAttr>();
+      return (*this)->getAttr(getMapAttrName()).cast<AffineMapAttr>();
     }
 
+    /// Impelements the AffineMapAccessInterface.
     /// Returns the AffineMapAttr associated with 'memref'.
     NamedAttribute getAffineMapAttrForMemRef(Value mref) {
-      assert(mref == memref());
+      assert(mref == memref() &&
+             "Expected mref argument to match memref operand");
       return {Identifier::get(getMapAttrName(), getContext()),
         getAffineMapAttr()};
     }
@@ -777,6 +781,7 @@ def AffinePrefetchOp : Affine_Op<"prefetch"> {
 class AffineStoreOpBase<string mnemonic, list<OpTrait> traits = []> :
     Affine_Op<mnemonic, !listconcat(traits,
     [DeclareOpInterfaceMethods<AffineWriteOpInterface>,
+    DeclareOpInterfaceMethods<AffineMapAccessInterface>,
     MemRefsNormalizable])> {
   code extraClassDeclarationBase = [{
     /// Returns the operand index of the value to be stored.
@@ -789,14 +794,7 @@ class AffineStoreOpBase<string mnemonic, list<OpTrait> traits = []> :
 
     /// Returns the affine map used to index the memref for this operation.
     AffineMapAttr getAffineMapAttr() {
-      return getAttr(getMapAttrName()).cast<AffineMapAttr>();
-    }
-
-    /// Returns the AffineMapAttr associated with 'memref'.
-    NamedAttribute getAffineMapAttrForMemRef(Value memref) {
-      assert(memref == getMemRef());
-      return {Identifier::get(getMapAttrName(), getContext()),
-              getAffineMapAttr()};
+      return (*this)->getAttr(getMapAttrName()).cast<AffineMapAttr>();
     }
 
     static StringRef getMapAttrName() { return "map"; }

@@ -258,11 +258,11 @@ bool Symbol::CanReplaceDetails(const Details &details) const {
               return has<SubprogramNameDetails>() || has<EntityDetails>();
             },
             [&](const DerivedTypeDetails &) {
-              const auto *derived{detailsIf<DerivedTypeDetails>()};
+              const auto *derived{this->detailsIf<DerivedTypeDetails>()};
               return derived && derived->isForwardReferenced();
             },
             [&](const UseDetails &x) {
-              const auto *use{detailsIf<UseDetails>()};
+              const auto *use{this->detailsIf<UseDetails>()};
               return use && use->symbol() == x.symbol();
             },
             [](const auto &) { return false; },
@@ -431,8 +431,11 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const Details &details) {
           },
           [&](const UseErrorDetails &x) {
             os << " uses:";
+            char sep{':'};
             for (const auto &[location, module] : x.occurrences()) {
-              os << " from " << module->GetName().value() << " at " << location;
+              os << sep << " from " << module->GetName().value() << " at "
+                 << location;
+              sep = ',';
             }
           },
           [](const HostAssocDetails &) {},

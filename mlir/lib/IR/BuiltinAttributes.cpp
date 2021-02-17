@@ -35,7 +35,7 @@ AffineMap AffineMapAttr::getValue() const { return getImpl()->value; }
 // ArrayAttr
 //===----------------------------------------------------------------------===//
 
-ArrayAttr ArrayAttr::get(ArrayRef<Attribute> value, MLIRContext *context) {
+ArrayAttr ArrayAttr::get(MLIRContext *context, ArrayRef<Attribute> value) {
   return Base::get(context, value);
 }
 
@@ -134,8 +134,8 @@ DictionaryAttr::findDuplicate(SmallVectorImpl<NamedAttribute> &array,
   return findDuplicateElement(array);
 }
 
-DictionaryAttr DictionaryAttr::get(ArrayRef<NamedAttribute> value,
-                                   MLIRContext *context) {
+DictionaryAttr DictionaryAttr::get(MLIRContext *context,
+                                   ArrayRef<NamedAttribute> value) {
   if (value.empty())
     return DictionaryAttr::getEmpty(context);
   assert(llvm::all_of(value,
@@ -267,13 +267,12 @@ LogicalResult FloatAttr::verifyConstructionInvariants(Location loc, Type type,
 // SymbolRefAttr
 //===----------------------------------------------------------------------===//
 
-FlatSymbolRefAttr SymbolRefAttr::get(StringRef value, MLIRContext *ctx) {
+FlatSymbolRefAttr SymbolRefAttr::get(MLIRContext *ctx, StringRef value) {
   return Base::get(ctx, value, llvm::None).cast<FlatSymbolRefAttr>();
 }
 
-SymbolRefAttr SymbolRefAttr::get(StringRef value,
-                                 ArrayRef<FlatSymbolRefAttr> nestedReferences,
-                                 MLIRContext *ctx) {
+SymbolRefAttr SymbolRefAttr::get(MLIRContext *ctx, StringRef value,
+                                 ArrayRef<FlatSymbolRefAttr> nestedReferences) {
   return Base::get(ctx, value, nestedReferences);
 }
 
@@ -294,7 +293,7 @@ ArrayRef<FlatSymbolRefAttr> SymbolRefAttr::getNestedReferences() const {
 
 IntegerAttr IntegerAttr::get(Type type, const APInt &value) {
   if (type.isSignlessInteger(1))
-    return BoolAttr::get(value.getBoolValue(), type.getContext());
+    return BoolAttr::get(type.getContext(), value.getBoolValue());
   return Base::get(type.getContext(), type, value);
 }
 
@@ -377,8 +376,8 @@ IntegerSet IntegerSetAttr::getValue() const { return getImpl()->value; }
 // OpaqueAttr
 //===----------------------------------------------------------------------===//
 
-OpaqueAttr OpaqueAttr::get(Identifier dialect, StringRef attrData, Type type,
-                           MLIRContext *context) {
+OpaqueAttr OpaqueAttr::get(MLIRContext *context, Identifier dialect,
+                           StringRef attrData, Type type) {
   return Base::get(context, dialect, attrData, type);
 }
 
@@ -409,7 +408,7 @@ LogicalResult OpaqueAttr::verifyConstructionInvariants(Location loc,
 // StringAttr
 //===----------------------------------------------------------------------===//
 
-StringAttr StringAttr::get(StringRef bytes, MLIRContext *context) {
+StringAttr StringAttr::get(MLIRContext *context, StringRef bytes) {
   return get(bytes, NoneType::get(context));
 }
 
@@ -459,6 +458,8 @@ bool ElementsAttr::isValidIndex(ArrayRef<uint64_t> index) const {
 
   // Verify that the rank of the indices matches the held type.
   auto rank = type.getRank();
+  if (rank == 0 && index.size() == 1 && index[0] == 0)
+    return true;
   if (rank != static_cast<int64_t>(index.size()))
     return false;
 
@@ -1460,108 +1461,4 @@ std::vector<ptrdiff_t> SparseElementsAttr::getFlattenedSparseIndices() const {
     flatSparseIndices.push_back(getFlattenedIndex(
         {&*std::next(sparseIndexValues.begin(), i * rank), rank}));
   return flatSparseIndices;
-}
-
-//===----------------------------------------------------------------------===//
-// MutableDictionaryAttr
-//===----------------------------------------------------------------------===//
-
-MutableDictionaryAttr::MutableDictionaryAttr(
-    ArrayRef<NamedAttribute> attributes) {
-  setAttrs(attributes);
-}
-
-/// Return the underlying dictionary attribute.
-DictionaryAttr
-MutableDictionaryAttr::getDictionary(MLIRContext *context) const {
-  // Construct empty DictionaryAttr if needed.
-  if (!attrs)
-    return DictionaryAttr::get({}, context);
-  return attrs;
-}
-
-ArrayRef<NamedAttribute> MutableDictionaryAttr::getAttrs() const {
-  return attrs ? attrs.getValue() : llvm::None;
-}
-
-/// Replace the held attributes with ones provided in 'newAttrs'.
-void MutableDictionaryAttr::setAttrs(ArrayRef<NamedAttribute> attributes) {
-  // Don't create an attribute list if there are no attributes.
-  if (attributes.empty())
-    attrs = nullptr;
-  else
-    attrs = DictionaryAttr::get(attributes, attributes[0].second.getContext());
-}
-
-/// Return the specified attribute if present, null otherwise.
-Attribute MutableDictionaryAttr::get(StringRef name) const {
-  return attrs ? attrs.get(name) : nullptr;
-}
-
-/// Return the specified attribute if present, null otherwise.
-Attribute MutableDictionaryAttr::get(Identifier name) const {
-  return attrs ? attrs.get(name) : nullptr;
-}
-
-/// Return the specified named attribute if present, None otherwise.
-Optional<NamedAttribute> MutableDictionaryAttr::getNamed(StringRef name) const {
-  return attrs ? attrs.getNamed(name) : Optional<NamedAttribute>();
-}
-Optional<NamedAttribute>
-MutableDictionaryAttr::getNamed(Identifier name) const {
-  return attrs ? attrs.getNamed(name) : Optional<NamedAttribute>();
-}
-
-/// If the an attribute exists with the specified name, change it to the new
-/// value.  Otherwise, add a new attribute with the specified name/value.
-void MutableDictionaryAttr::set(Identifier name, Attribute value) {
-  assert(value && "attributes may never be null");
-
-  // Look for an existing value for the given name, and set it in-place.
-  ArrayRef<NamedAttribute> values = getAttrs();
-  const auto *it = llvm::find_if(
-      values, [name](NamedAttribute attr) { return attr.first == name; });
-  if (it != values.end()) {
-    // Bail out early if the value is the same as what we already have.
-    if (it->second == value)
-      return;
-
-    SmallVector<NamedAttribute, 8> newAttrs(values.begin(), values.end());
-    newAttrs[it - values.begin()].second = value;
-    attrs = DictionaryAttr::getWithSorted(newAttrs, value.getContext());
-    return;
-  }
-
-  // Otherwise, insert the new attribute into its sorted position.
-  it = llvm::lower_bound(values, name);
-  SmallVector<NamedAttribute, 8> newAttrs;
-  newAttrs.reserve(values.size() + 1);
-  newAttrs.append(values.begin(), it);
-  newAttrs.push_back({name, value});
-  newAttrs.append(it, values.end());
-  attrs = DictionaryAttr::getWithSorted(newAttrs, value.getContext());
-}
-
-/// Remove the attribute with the specified name if it exists.  The return
-/// value indicates whether the attribute was present or not.
-auto MutableDictionaryAttr::remove(Identifier name) -> RemoveResult {
-  auto origAttrs = getAttrs();
-  for (unsigned i = 0, e = origAttrs.size(); i != e; ++i) {
-    if (origAttrs[i].first == name) {
-      // Handle the simple case of removing the only attribute in the list.
-      if (e == 1) {
-        attrs = nullptr;
-        return RemoveResult::Removed;
-      }
-
-      SmallVector<NamedAttribute, 8> newAttrs;
-      newAttrs.reserve(origAttrs.size() - 1);
-      newAttrs.append(origAttrs.begin(), origAttrs.begin() + i);
-      newAttrs.append(origAttrs.begin() + i + 1, origAttrs.end());
-      attrs = DictionaryAttr::getWithSorted(newAttrs,
-                                            newAttrs[0].second.getContext());
-      return RemoveResult::Removed;
-    }
-  }
-  return RemoveResult::NotFound;
 }

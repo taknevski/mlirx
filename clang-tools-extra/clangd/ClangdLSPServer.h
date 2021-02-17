@@ -14,11 +14,13 @@
 #include "Features.inc"
 #include "FindSymbols.h"
 #include "GlobalCompilationDatabase.h"
+#include "LSPBinder.h"
 #include "Protocol.h"
 #include "Transport.h"
 #include "support/Context.h"
 #include "support/MemoryTree.h"
 #include "support/Path.h"
+#include "support/Threading.h"
 #include "clang/Tooling/Core/Replacement.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringSet.h"
@@ -40,6 +42,8 @@ class SymbolIndex;
 class ClangdLSPServer : private ClangdServer::Callbacks {
 public:
   struct Options : ClangdServer::Options {
+    /// Supplies configuration (overrides ClangdServer::ContextProvider).
+    config::Provider *ConfigProvider = nullptr;
     /// Look for compilation databases, rather than using compile commands
     /// set via LSP (extensions) only.
     bool UseDirBasedCDB = true;
@@ -48,6 +52,9 @@ public:
     llvm::Optional<Path> CompileCommandsDir;
     /// The offset-encoding to use, or None to negotiate it over LSP.
     llvm::Optional<OffsetEncoding> Encoding;
+    /// If set, periodically called to release memory.
+    /// Consider malloc_trim(3)
+    std::function<void()> MemoryCleanup = nullptr;
 
     /// Per-feature options. Generally ClangdServer lets these vary
     /// per-request, but LSP allows limited/no customizations.
@@ -78,16 +85,13 @@ private:
   void onDiagnosticsReady(PathRef File, llvm::StringRef Version,
                           std::vector<Diag> Diagnostics) override;
   void onFileUpdated(PathRef File, const TUStatus &Status) override;
-  void
-  onHighlightingsReady(PathRef File, llvm::StringRef Version,
-                       std::vector<HighlightingToken> Highlightings) override;
   void onBackgroundIndexProgress(const BackgroundQueue::Stats &Stats) override;
 
   // LSP methods. Notifications have signature void(const Params&).
   // Calls have signature void(const Params&, Callback<Response>).
   void onInitialize(const InitializeParams &, Callback<llvm::json::Value>);
   void onInitialized(const InitializedParams &);
-  void onShutdown(const ShutdownParams &, Callback<std::nullptr_t>);
+  void onShutdown(const NoParams &, Callback<std::nullptr_t>);
   void onSync(const NoParams &, Callback<std::nullptr_t>);
   void onDocumentDidOpen(const DidOpenTextDocumentParams &);
   void onDocumentDidChange(const DidChangeTextDocumentParams &);
@@ -123,7 +127,6 @@ private:
   void onDocumentHighlight(const TextDocumentPositionParams &,
                            Callback<std::vector<DocumentHighlight>>);
   void onFileEvent(const DidChangeWatchedFilesParams &);
-  void onCommand(const ExecuteCommandParams &, Callback<llvm::json::Value>);
   void onWorkspaceSymbol(const WorkspaceSymbolParams &,
                          Callback<std::vector<SymbolInformation>>);
   void onPrepareRename(const TextDocumentPositionParams &,
@@ -156,7 +159,16 @@ private:
   /// This is a clangd extension. Provides a json tree representing memory usage
   /// hierarchy.
   void onMemoryUsage(const NoParams &, Callback<MemoryTree>);
+  void onCommand(const ExecuteCommandParams &, Callback<llvm::json::Value>);
 
+  /// Implement commands.
+  void onCommandApplyEdit(const WorkspaceEdit &, Callback<llvm::json::Value>);
+  void onCommandApplyTweak(const TweakArgs &, Callback<llvm::json::Value>);
+
+  void applyEdit(WorkspaceEdit WE, llvm::json::Value Success,
+                 Callback<llvm::json::Value> Reply);
+
+  void bindMethods(LSPBinder &);
   std::vector<Fix> getFixes(StringRef File, const clangd::Diagnostic &D);
 
   /// Checks if completion request should be ignored. We need this due to the
@@ -173,20 +185,18 @@ private:
       llvm::function_ref<bool(llvm::StringRef File)> Filter);
   void applyConfiguration(const ConfigurationSettings &Settings);
 
-  /// Sends a "publishSemanticHighlighting" notification to the LSP client.
-  void
-  publishTheiaSemanticHighlighting(const TheiaSemanticHighlightingParams &);
-
   /// Sends a "publishDiagnostics" notification to the LSP client.
   void publishDiagnostics(const PublishDiagnosticsParams &);
 
   /// Runs profiling and exports memory usage metrics if tracing is enabled and
   /// profiling hasn't happened recently.
   void maybeExportMemoryProfile();
+  PeriodicThrottler ShouldProfile;
 
-  /// Timepoint until which profiling is off. It is used to throttle profiling
-  /// requests.
-  std::chrono::steady_clock::time_point NextProfileTime;
+  /// Run the MemoryCleanup callback if it's time.
+  /// This method is thread safe.
+  void maybeCleanupMemory();
+  PeriodicThrottler ShouldCleanupMemory;
 
   /// Since initialization of CDBs and ClangdServer is done lazily, the
   /// following context captures the one used while creating ClangdLSPServer and
@@ -206,8 +216,6 @@ private:
       DiagnosticToReplacementMap;
   /// Caches FixIts per file and diagnostics
   llvm::StringMap<DiagnosticToReplacementMap> FixItsMap;
-  std::mutex HighlightingsMutex;
-  llvm::StringMap<std::vector<HighlightingToken>> FileToHighlightings;
   // Last semantic-tokens response, for incremental requests.
   std::mutex SemanticTokensMutex;
   llvm::StringMap<SemanticTokens> LastSemanticTokens;
@@ -219,29 +227,6 @@ private:
   std::unique_ptr<MessageHandler> MsgHandler;
   std::mutex TranspWriter;
 
-  template <typename T>
-  static Expected<T> parse(const llvm::json::Value &Raw,
-                           llvm::StringRef PayloadName,
-                           llvm::StringRef PayloadKind) {
-    T Result;
-    llvm::json::Path::Root Root;
-    if (!fromJSON(Raw, Result, Root)) {
-      elog("Failed to decode {0} {1}: {2}", PayloadName, PayloadKind,
-           Root.getError());
-      // Dump the relevant parts of the broken message.
-      std::string Context;
-      llvm::raw_string_ostream OS(Context);
-      Root.printErrorContext(Raw, OS);
-      vlog("{0}", OS.str());
-      // Report the error (e.g. to the client).
-      return llvm::make_error<LSPError>(
-          llvm::formatv("failed to decode {0} {1}: {2}", PayloadName,
-                        PayloadKind, fmt_consume(Root.getError())),
-          ErrorCode::InvalidParams);
-    }
-    return std::move(Result);
-  }
-
   template <typename Response>
   void call(StringRef Method, llvm::json::Value Params, Callback<Response> CB) {
     // Wrap the callback with LSP conversion and error-handling.
@@ -251,7 +236,7 @@ private:
             llvm::Expected<llvm::json::Value> RawResponse) mutable {
           if (!RawResponse)
             return CB(RawResponse.takeError());
-          CB(parse<Response>(*RawResponse, Method, "response"));
+          CB(LSPBinder::parse<Response>(*RawResponse, Method, "response"));
         };
     callRaw(Method, std::move(Params), std::move(HandleReply));
   }
@@ -264,6 +249,8 @@ private:
     Params.value = std::move(Value);
     notify("$/progress", Params);
   }
+
+  LSPBinder::RawHandlers Handlers;
 
   const ThreadsafeFS &TFS;
   /// Options used for diagnostics.

@@ -547,7 +547,7 @@ struct SimplifyTrivialLoops : public OpRewritePattern<ForOp> {
 
     // If the loop is known to have 1 iteration, inline its body and remove the
     // loop.
-    llvm::APInt stepValue = lb.getValue().cast<IntegerAttr>().getValue();
+    llvm::APInt stepValue = step.getValue().cast<IntegerAttr>().getValue();
     if ((lbValue + stepValue).sge(ubValue)) {
       SmallVector<Value, 4> blockArgs;
       blockArgs.reserve(op.getNumIterOperands() + 1);
@@ -708,7 +708,9 @@ void IfOp::getSuccessorRegions(Optional<unsigned> index,
   } else {
     // If the condition isn't constant, both regions may be executed.
     regions.push_back(RegionSuccessor(&thenRegion()));
-    regions.push_back(RegionSuccessor(elseRegion));
+    // If the else region does not exist, it is not a viable successor.
+    if (elseRegion)
+      regions.push_back(RegionSuccessor(elseRegion));
     return;
   }
 
@@ -1172,7 +1174,7 @@ static void print(OpAsmPrinter &p, ReduceOp op) {
 static LogicalResult verify(ReduceReturnOp op) {
   // The type of the return value should be the same type as the type of the
   // operand of the enclosing ReduceOp.
-  auto reduceOp = cast<ReduceOp>(op.getParentOp());
+  auto reduceOp = cast<ReduceOp>(op->getParentOp());
   Type reduceType = reduceOp.operand().getType();
   if (reduceType != op.result().getType())
     return op.emitOpError() << "needs to have type " << reduceType

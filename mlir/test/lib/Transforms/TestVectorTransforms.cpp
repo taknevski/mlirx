@@ -24,24 +24,45 @@ namespace {
 
 struct TestVectorToVectorConversion
     : public PassWrapper<TestVectorToVectorConversion, FunctionPass> {
+  TestVectorToVectorConversion() = default;
+  TestVectorToVectorConversion(const TestVectorToVectorConversion &pass) {}
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<AffineDialect>();
+  }
+
+  Option<bool> unroll{*this, "unroll", llvm::cl::desc("Include unrolling"),
+                      llvm::cl::init(false)};
+
   void runOnFunction() override {
     OwningRewritePatternList patterns;
     auto *ctx = &getContext();
-    patterns.insert<UnrollVectorPattern>(
-        ctx, UnrollVectorOptions().setNativeShapeFn(getShape));
+    if (unroll) {
+      patterns.insert<UnrollVectorPattern>(
+          ctx,
+          UnrollVectorOptions().setNativeShapeFn(getShape).setFilterConstraint(
+              filter));
+    }
     populateVectorToVectorCanonicalizationPatterns(patterns, ctx);
     populateVectorToVectorTransformationPatterns(patterns, ctx);
-    applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
+    populateBubbleVectorBitCastOpPatterns(patterns, ctx);
+    populateCastAwayVectorLeadingOneDimPatterns(patterns, ctx);
+    populateSplitVectorTransferPatterns(patterns, ctx);
+    (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
   }
 
 private:
   // Return the target shape based on op type.
   static Optional<SmallVector<int64_t, 4>> getShape(Operation *op) {
-    if (isa<AddFOp>(op))
+    if (isa<AddFOp, SelectOp, CmpFOp>(op))
       return SmallVector<int64_t, 4>(2, 2);
     if (isa<vector::ContractionOp>(op))
       return SmallVector<int64_t, 4>(3, 2);
     return llvm::None;
+  }
+
+  static LogicalResult filter(Operation *op) {
+    return success(isa<AddFOp, SelectOp, CmpFOp, ContractionOp>(op));
   }
 };
 
@@ -50,7 +71,7 @@ struct TestVectorSlicesConversion
   void runOnFunction() override {
     OwningRewritePatternList patterns;
     populateVectorSlicesLoweringPatterns(patterns, &getContext());
-    applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
+    (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
   }
 };
 
@@ -87,7 +108,7 @@ struct TestVectorContractionConversion
       VectorTransformsOptions options{lowering};
       patterns.insert<ContractionOpToOuterProductOpLowering>(options,
                                                              &getContext());
-      applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
+      (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
       return;
     }
 
@@ -103,7 +124,7 @@ struct TestVectorContractionConversion
               return failure();
             return success();
           });
-      applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
+      (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
       return;
     }
 
@@ -117,7 +138,7 @@ struct TestVectorContractionConversion
       transposeLowering = VectorTransposeLowering::Flat;
     VectorTransformsOptions options{contractLowering, transposeLowering};
     populateVectorContractLoweringPatterns(patterns, &getContext(), options);
-    applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
+    (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
   }
 };
 
@@ -131,8 +152,9 @@ struct TestVectorUnrollingPatterns
     patterns.insert<UnrollVectorPattern>(
         ctx, UnrollVectorOptions()
                  .setNativeShape(ArrayRef<int64_t>{2, 2})
-                 .setFilterConstraint(
-                     [](Operation *op) { return success(isa<AddFOp>(op)); }));
+                 .setFilterConstraint([](Operation *op) {
+                   return success(isa<AddFOp, vector::FMAOp>(op));
+                 }));
 
     if (unrollBasedOnType) {
       UnrollVectorOptions::NativeShapeFnType nativeShapeFn =
@@ -164,7 +186,7 @@ struct TestVectorUnrollingPatterns
     }
     populateVectorToVectorCanonicalizationPatterns(patterns, ctx);
     populateVectorToVectorTransformationPatterns(patterns, ctx);
-    applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
+    (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
   }
 
   Option<bool> unrollBasedOnType{
@@ -219,7 +241,7 @@ struct TestVectorDistributePatterns
     });
     patterns.insert<PointwiseExtractPattern>(ctx);
     populateVectorToVectorTransformationPatterns(patterns, ctx);
-    applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
+    (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
   }
 };
 
@@ -279,7 +301,7 @@ struct TestVectorToLoopPatterns
     });
     patterns.insert<PointwiseExtractPattern>(ctx);
     populateVectorToVectorTransformationPatterns(patterns, ctx);
-    applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
+    (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
   }
 };
 
@@ -301,7 +323,7 @@ struct TestVectorTransferUnrollingPatterns
             }));
     populateVectorToVectorCanonicalizationPatterns(patterns, ctx);
     populateVectorToVectorTransformationPatterns(patterns, ctx);
-    applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
+    (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
   }
 };
 
@@ -330,7 +352,7 @@ struct TestVectorTransferFullPartialSplitPatterns
     else
       options.setVectorTransferSplit(VectorTransferSplit::VectorTransfer);
     patterns.insert<VectorTransferFullPartialRewriter>(ctx, options);
-    applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
+    (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
   }
 };
 

@@ -9,6 +9,36 @@
 #ifndef _OPENCL_BASE_H_
 #define _OPENCL_BASE_H_
 
+// Define extension macros
+
+#if (defined(__OPENCL_CPP_VERSION__) || __OPENCL_C_VERSION__ >= 200)
+// For SPIR all extensions are supported.
+#if defined(__SPIR__)
+#define cl_khr_subgroup_extended_types 1
+#define cl_khr_subgroup_non_uniform_vote 1
+#define cl_khr_subgroup_ballot 1
+#define cl_khr_subgroup_non_uniform_arithmetic 1
+#define cl_khr_subgroup_shuffle 1
+#define cl_khr_subgroup_shuffle_relative 1
+#define cl_khr_subgroup_clustered_reduce 1
+#endif // defined(__SPIR__)
+#endif // (defined(__OPENCL_CPP_VERSION__) || __OPENCL_C_VERSION__ >= 200)
+
+// Define feature macros for OpenCL C 2.0
+#if (defined(__OPENCL_CPP_VERSION__) || __OPENCL_C_VERSION__ == 200)
+#define __opencl_c_pipes 1
+#define __opencl_c_generic_address_space 1
+#define __opencl_c_work_group_collective_functions 1
+#define __opencl_c_atomic_order_acq_rel 1
+#define __opencl_c_atomic_order_seq_cst 1
+#define __opencl_c_atomic_scope_device 1
+#define __opencl_c_atomic_scope_all_devices 1
+#define __opencl_c_device_enqueue 1
+#define __opencl_c_read_write_images 1
+#define __opencl_c_program_scope_global_variables 1
+#define __opencl_c_images 1
+#endif
+
 // built-in scalar data types:
 
 /**

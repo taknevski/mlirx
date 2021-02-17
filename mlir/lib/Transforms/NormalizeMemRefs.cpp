@@ -230,9 +230,8 @@ void NormalizeMemRefs::updateFunctionSignature(FuncOp funcOp,
 
     // We create a new function type and modify the function signature with this
     // new type.
-    newFuncType = FunctionType::get(/*inputs=*/argTypes,
-                                    /*results=*/resultTypes,
-                                    /*context=*/&getContext());
+    newFuncType = FunctionType::get(&getContext(), /*inputs=*/argTypes,
+                                    /*results=*/resultTypes);
   }
 
   // Since we update the function signature, it might affect the result types at
@@ -330,7 +329,7 @@ void NormalizeMemRefs::normalizeFuncOpMemRefs(FuncOp funcOp,
   SmallVector<AllocOp, 4> allocOps;
   funcOp.walk([&](AllocOp op) { allocOps.push_back(op); });
   for (AllocOp allocOp : allocOps)
-    normalizeMemRef(allocOp);
+    (void)normalizeMemRef(allocOp);
 
   // We use this OpBuilder to create new memref layout later.
   OpBuilder b(funcOp);
@@ -463,9 +462,9 @@ void NormalizeMemRefs::normalizeFuncOpMemRefs(FuncOp funcOp,
       continue;
     }
 
-    FunctionType newFuncType = FunctionType::get(/*inputs=*/inputTypes,
-                                                 /*results=*/resultTypes,
-                                                 /*context=*/&getContext());
+    FunctionType newFuncType =
+        FunctionType::get(&getContext(), /*inputs=*/inputTypes,
+                          /*results=*/resultTypes);
     // Setting the new function signature for this external function.
     funcOp.setType(newFuncType);
   }

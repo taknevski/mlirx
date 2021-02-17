@@ -451,7 +451,7 @@ bool AppleObjCRuntimeV2::GetDynamicTypeAndAddress(
     assert(in_value.GetTargetSP().get() == m_process->CalculateTarget().get());
 
   class_type_or_name.Clear();
-  value_type = Value::ValueType::eValueTypeScalar;
+  value_type = Value::ValueType::Scalar;
 
   // Make sure we can have a dynamic value before starting...
   if (CouldHaveDynamicValue(in_value)) {
@@ -1346,12 +1346,12 @@ AppleObjCRuntimeV2::UpdateISAToDescriptorMapDynamic(
 
     // Next make the runner function for our implementation utility function.
     Value value;
-    value.SetValueType(Value::eValueTypeScalar);
+    value.SetValueType(Value::ValueType::Scalar);
     value.SetCompilerType(clang_void_pointer_type);
     arguments.PushValue(value);
     arguments.PushValue(value);
 
-    value.SetValueType(Value::eValueTypeScalar);
+    value.SetValueType(Value::ValueType::Scalar);
     value.SetCompilerType(clang_uint32_t_type);
     arguments.PushValue(value);
     arguments.PushValue(value);
@@ -1420,7 +1420,7 @@ AppleObjCRuntimeV2::UpdateISAToDescriptorMapDynamic(
     options.SetIsForUtilityExpr(true);
 
     Value return_value;
-    return_value.SetValueType(Value::eValueTypeScalar);
+    return_value.SetValueType(Value::ValueType::Scalar);
     return_value.SetCompilerType(clang_uint32_t_type);
     return_value.GetScalar() = 0;
 
@@ -1590,10 +1590,7 @@ AppleObjCRuntimeV2::UpdateISAToDescriptorMapSharedCache() {
 
     ObjCLanguageRuntime *objc_runtime = ObjCLanguageRuntime::Get(*process);
     if (objc_runtime) {
-      const ModuleList &images = process->GetTarget().GetImages();
-      std::lock_guard<std::recursive_mutex> guard(images.GetMutex());
-      for (size_t i = 0; i < images.GetSize(); ++i) {
-        lldb::ModuleSP mod_sp = images.GetModuleAtIndexUnlocked(i);
+      for (lldb::ModuleSP mod_sp : process->GetTarget().GetImages().Modules()) {
         if (objc_runtime->IsModuleObjCLibrary(mod_sp)) {
           const Symbol *symbol =
               mod_sp->FindFirstSymbolWithNameAndType(g_class_getNameRaw_symbol_name, 
@@ -1631,12 +1628,12 @@ AppleObjCRuntimeV2::UpdateISAToDescriptorMapSharedCache() {
 
     // Next make the function caller for our implementation utility function.
     Value value;
-    value.SetValueType(Value::eValueTypeScalar);
+    value.SetValueType(Value::ValueType::Scalar);
     value.SetCompilerType(clang_void_pointer_type);
     arguments.PushValue(value);
     arguments.PushValue(value);
 
-    value.SetValueType(Value::eValueTypeScalar);
+    value.SetValueType(Value::ValueType::Scalar);
     value.SetCompilerType(clang_uint32_t_type);
     arguments.PushValue(value);
     arguments.PushValue(value);
@@ -1701,7 +1698,7 @@ AppleObjCRuntimeV2::UpdateISAToDescriptorMapSharedCache() {
     options.SetIsForUtilityExpr(true);
 
     Value return_value;
-    return_value.SetValueType(Value::eValueTypeScalar);
+    return_value.SetValueType(Value::ValueType::Scalar);
     return_value.SetCompilerType(clang_uint32_t_type);
     return_value.GetScalar() = 0;
 
@@ -1831,10 +1828,9 @@ lldb::addr_t AppleObjCRuntimeV2::GetSharedCacheReadOnlyAddress() {
 }
 
 void AppleObjCRuntimeV2::UpdateISAToDescriptorMapIfNeeded() {
-  Log *log(GetLogIfAnyCategoriesSet(LIBLLDB_LOG_PROCESS | LIBLLDB_LOG_TYPES));
+  LLDB_SCOPED_TIMER();
 
-  static Timer::Category func_cat(LLVM_PRETTY_FUNCTION);
-  Timer scoped_timer(func_cat, LLVM_PRETTY_FUNCTION);
+  Log *log(GetLogIfAnyCategoriesSet(LIBLLDB_LOG_PROCESS | LIBLLDB_LOG_TYPES));
 
   // Else we need to check with our process to see when the map was updated.
   Process *process = GetProcess();

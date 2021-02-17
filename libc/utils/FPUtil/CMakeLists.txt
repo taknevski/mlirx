@@ -29,6 +29,8 @@ add_header_library(
     NormalFloat.h
   DEPENDS
     libc.include.math
+    libc.include.errno
+    libc.include.fenv
     libc.utils.CPP.standalone_cpp
 )
 

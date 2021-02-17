@@ -74,14 +74,46 @@
 #include <new>
 
 using namespace llvm;
+using namespace llvm::XCOFF;
 
 #define DEBUG_TYPE "asmprinter"
+
+// Specialize DenseMapInfo to allow
+// std::pair<const MCSymbol *, MCSymbolRefExpr::VariantKind> in DenseMap.
+// This specialization is needed here because that type is used as keys in the
+// map representing TOC entries.
+template <>
+struct DenseMapInfo<std::pair<const MCSymbol *, MCSymbolRefExpr::VariantKind>> {
+  using TOCKey = std::pair<const MCSymbol *, MCSymbolRefExpr::VariantKind>;
+
+  static inline TOCKey getEmptyKey() {
+    return {nullptr, MCSymbolRefExpr::VariantKind::VK_None};
+  }
+  static inline TOCKey getTombstoneKey() {
+    return {nullptr, MCSymbolRefExpr::VariantKind::VK_Invalid};
+  }
+  static unsigned getHashValue(const TOCKey &PairVal) {
+    return detail::combineHashValue(
+        DenseMapInfo<const MCSymbol *>::getHashValue(PairVal.first),
+        DenseMapInfo<int>::getHashValue(PairVal.second));
+  }
+  static bool isEqual(const TOCKey &A, const TOCKey &B) { return A == B; }
+};
 
 namespace {
 
 class PPCAsmPrinter : public AsmPrinter {
 protected:
-  MapVector<const MCSymbol *, MCSymbol *> TOC;
+  // For TLS on AIX, we need to be able to identify TOC entries of specific
+  // VariantKind so we can add the right relocations when we generate the
+  // entries. So each entry is represented by a pair of MCSymbol and
+  // VariantKind. For example, we need to be able to identify the following
+  // entry as a TLSGD entry so we can add the @m relocation:
+  //   .tc .i[TC],i[TL]@m
+  // By default, VK_None is used for the VariantKind.
+  MapVector<std::pair<const MCSymbol *, MCSymbolRefExpr::VariantKind>,
+            MCSymbol *>
+      TOC;
   const PPCSubtarget *Subtarget = nullptr;
   StackMaps SM;
 
@@ -92,7 +124,9 @@ public:
 
   StringRef getPassName() const override { return "PowerPC Assembly Printer"; }
 
-  MCSymbol *lookUpOrCreateTOCEntry(const MCSymbol *Sym);
+  MCSymbol *lookUpOrCreateTOCEntry(const MCSymbol *Sym,
+                                   MCSymbolRefExpr::VariantKind Kind =
+                                       MCSymbolRefExpr::VariantKind::VK_None);
 
   bool doInitialization(Module &M) override {
     if (!TOC.empty())
@@ -163,6 +197,8 @@ private:
   DenseMap<const GlobalObject *, SmallVector<const GlobalAlias *, 1>>
       GOAliasMap;
 
+  void emitTracebackTable();
+
 public:
   PPCAIXAsmPrinter(TargetMachine &TM, std::unique_ptr<MCStreamer> Streamer)
       : PPCAsmPrinter(TM, std::move(Streamer)) {
@@ -185,6 +221,8 @@ public:
   void emitFunctionDescriptor() override;
 
   void emitFunctionEntryLabel() override;
+
+  void emitFunctionBodyEnd() override;
 
   void emitEndOfAsmFile(Module &) override;
 
@@ -339,8 +377,10 @@ bool PPCAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
 /// lookUpOrCreateTOCEntry -- Given a symbol, look up whether a TOC entry
 /// exists for it.  If not, create one.  Then return a symbol that references
 /// the TOC entry.
-MCSymbol *PPCAsmPrinter::lookUpOrCreateTOCEntry(const MCSymbol *Sym) {
-  MCSymbol *&TOCEntry = TOC[Sym];
+MCSymbol *
+PPCAsmPrinter::lookUpOrCreateTOCEntry(const MCSymbol *Sym,
+                                      MCSymbolRefExpr::VariantKind Kind) {
+  MCSymbol *&TOCEntry = TOC[{Sym, Kind}];
   if (!TOCEntry)
     TOCEntry = createTempSymbol("C");
   return TOCEntry;
@@ -599,7 +639,8 @@ void PPCAsmPrinter::emitInstruction(const MachineInstr *MI) {
       [IsPPC64, getTOCRelocAdjustedExprForXCOFF,
        this](const MCSymbol *MOSymbol, const MCExpr *Expr) -> const MCExpr * {
     const unsigned EntryByteSize = IsPPC64 ? 8 : 4;
-    const auto TOCEntryIter = TOC.find(MOSymbol);
+    const auto TOCEntryIter =
+        TOC.find({MOSymbol, MCSymbolRefExpr::VariantKind::VK_None});
     assert(TOCEntryIter != TOC.end() &&
            "Could not find the TOC entry for this symbol.");
     const ptrdiff_t EntryDistanceFromTOCBase =
@@ -1500,7 +1541,7 @@ void PPCLinuxAsmPrinter::emitEndOfAsmFile(Module &M) {
       OutStreamer->emitValueToAlignment(4);
 
     for (const auto &TOCMapPair : TOC) {
-      const MCSymbol *const TOCEntryTarget = TOCMapPair.first;
+      const MCSymbol *const TOCEntryTarget = TOCMapPair.first.first;
       MCSymbol *const TOCEntryLabel = TOCMapPair.second;
 
       OutStreamer->emitLabel(TOCEntryLabel);
@@ -1731,6 +1772,284 @@ void PPCAIXAsmPrinter::SetupMachineFunction(MachineFunction &MF) {
   return AsmPrinter::SetupMachineFunction(MF);
 }
 
+void PPCAIXAsmPrinter::emitFunctionBodyEnd() {
+
+  if (!TM.getXCOFFTracebackTable())
+    return;
+
+  emitTracebackTable();
+}
+
+void PPCAIXAsmPrinter::emitTracebackTable() {
+
+  // Create a symbol for the end of function.
+  MCSymbol *FuncEnd = createTempSymbol(MF->getName());
+  OutStreamer->emitLabel(FuncEnd);
+
+  OutStreamer->AddComment("Traceback table begin");
+  // Begin with a fullword of zero.
+  OutStreamer->emitIntValueInHexWithPadding(0, 4 /*size*/);
+
+  SmallString<128> CommentString;
+  raw_svector_ostream CommentOS(CommentString);
+
+  auto EmitComment = [&]() {
+    OutStreamer->AddComment(CommentOS.str());
+    CommentString.clear();
+  };
+
+  auto EmitCommentAndValue = [&](uint64_t Value, int Size) {
+    EmitComment();
+    OutStreamer->emitIntValueInHexWithPadding(Value, Size);
+  };
+
+  unsigned int Version = 0;
+  CommentOS << "Version = " << Version;
+  EmitCommentAndValue(Version, 1);
+
+  // There is a lack of information in the IR to assist with determining the
+  // source language. AIX exception handling mechanism would only search for
+  // personality routine and LSDA area when such language supports exception
+  // handling. So to be conservatively correct and allow runtime to do its job,
+  // we need to set it to C++ for now.
+  TracebackTable::LanguageID LanguageIdentifier =
+      TracebackTable::CPlusPlus; // C++
+
+  CommentOS << "Language = "
+            << getNameForTracebackTableLanguageId(LanguageIdentifier);
+  EmitCommentAndValue(LanguageIdentifier, 1);
+
+  //  This is only populated for the third and fourth bytes.
+  uint32_t FirstHalfOfMandatoryField = 0;
+
+  // Emit the 3rd byte of the mandatory field.
+
+  // We always set traceback offset bit to true.
+  FirstHalfOfMandatoryField |= TracebackTable::HasTraceBackTableOffsetMask;
+
+  const PPCFunctionInfo *FI = MF->getInfo<PPCFunctionInfo>();
+  const MachineRegisterInfo &MRI = MF->getRegInfo();
+
+  // Check the function uses floating-point processor instructions or not
+  for (unsigned Reg = PPC::F0; Reg <= PPC::F31; ++Reg) {
+    if (MRI.isPhysRegUsed(Reg)) {
+      FirstHalfOfMandatoryField |= TracebackTable::IsFloatingPointPresentMask;
+      break;
+    }
+  }
+
+#define GENBOOLCOMMENT(Prefix, V, Field)                                       \
+  CommentOS << (Prefix) << ((V) & (TracebackTable::Field##Mask) ? "+" : "-")   \
+            << #Field
+
+#define GENVALUECOMMENT(PrefixAndName, V, Field)                               \
+  CommentOS << (PrefixAndName) << " = "                                        \
+            << static_cast<unsigned>(((V) & (TracebackTable::Field##Mask)) >>  \
+                                     (TracebackTable::Field##Shift))
+
+  GENBOOLCOMMENT("", FirstHalfOfMandatoryField, IsGlobaLinkage);
+  GENBOOLCOMMENT(", ", FirstHalfOfMandatoryField, IsOutOfLineEpilogOrPrologue);
+  EmitComment();
+
+  GENBOOLCOMMENT("", FirstHalfOfMandatoryField, HasTraceBackTableOffset);
+  GENBOOLCOMMENT(", ", FirstHalfOfMandatoryField, IsInternalProcedure);
+  EmitComment();
+
+  GENBOOLCOMMENT("", FirstHalfOfMandatoryField, HasControlledStorage);
+  GENBOOLCOMMENT(", ", FirstHalfOfMandatoryField, IsTOCless);
+  EmitComment();
+
+  GENBOOLCOMMENT("", FirstHalfOfMandatoryField, IsFloatingPointPresent);
+  EmitComment();
+  GENBOOLCOMMENT("", FirstHalfOfMandatoryField,
+                 IsFloatingPointOperationLogOrAbortEnabled);
+  EmitComment();
+
+  OutStreamer->emitIntValueInHexWithPadding(
+      (FirstHalfOfMandatoryField & 0x0000ff00) >> 8, 1);
+
+  // Set the 4th byte of the mandatory field.
+  FirstHalfOfMandatoryField |= TracebackTable::IsFunctionNamePresentMask;
+
+  static_assert(XCOFF::AllocRegNo == 31, "Unexpected register usage!");
+  if (MRI.isPhysRegUsed(Subtarget->isPPC64() ? PPC::X31 : PPC::R31))
+    FirstHalfOfMandatoryField |= TracebackTable::IsAllocaUsedMask;
+
+  const SmallVectorImpl<Register> &MustSaveCRs = FI->getMustSaveCRs();
+  if (!MustSaveCRs.empty())
+    FirstHalfOfMandatoryField |= TracebackTable::IsCRSavedMask;
+
+  if (FI->mustSaveLR())
+    FirstHalfOfMandatoryField |= TracebackTable::IsLRSavedMask;
+
+  GENBOOLCOMMENT("", FirstHalfOfMandatoryField, IsInterruptHandler);
+  GENBOOLCOMMENT(", ", FirstHalfOfMandatoryField, IsFunctionNamePresent);
+  GENBOOLCOMMENT(", ", FirstHalfOfMandatoryField, IsAllocaUsed);
+  EmitComment();
+  GENVALUECOMMENT("OnConditionDirective", FirstHalfOfMandatoryField,
+                  OnConditionDirective);
+  GENBOOLCOMMENT(", ", FirstHalfOfMandatoryField, IsCRSaved);
+  GENBOOLCOMMENT(", ", FirstHalfOfMandatoryField, IsLRSaved);
+  EmitComment();
+  OutStreamer->emitIntValueInHexWithPadding((FirstHalfOfMandatoryField & 0xff),
+                                            1);
+
+  // Set the 5th byte of mandatory field.
+  uint32_t SecondHalfOfMandatoryField = 0;
+
+  // Always store back chain.
+  SecondHalfOfMandatoryField |= TracebackTable::IsBackChainStoredMask;
+
+  uint32_t FPRSaved = 0;
+  for (unsigned Reg = PPC::F14; Reg <= PPC::F31; ++Reg) {
+    if (MRI.isPhysRegModified(Reg)) {
+      FPRSaved = PPC::F31 - Reg + 1;
+      break;
+    }
+  }
+  SecondHalfOfMandatoryField |= (FPRSaved << TracebackTable::FPRSavedShift) &
+                                TracebackTable::FPRSavedMask;
+  GENBOOLCOMMENT("", SecondHalfOfMandatoryField, IsBackChainStored);
+  GENBOOLCOMMENT(", ", SecondHalfOfMandatoryField, IsFixup);
+  GENVALUECOMMENT(", NumOfFPRsSaved", SecondHalfOfMandatoryField, FPRSaved);
+  EmitComment();
+  OutStreamer->emitIntValueInHexWithPadding(
+      (SecondHalfOfMandatoryField & 0xff000000) >> 24, 1);
+
+  // Set the 6th byte of mandatory field.
+  bool ShouldEmitEHBlock = TargetLoweringObjectFileXCOFF::ShouldEmitEHBlock(MF);
+  if (ShouldEmitEHBlock)
+    SecondHalfOfMandatoryField |= TracebackTable::HasExtensionTableMask;
+
+  uint32_t GPRSaved = 0;
+
+  // X13 is reserved under 64-bit environment.
+  unsigned GPRBegin = Subtarget->isPPC64() ? PPC::X14 : PPC::R13;
+  unsigned GPREnd = Subtarget->isPPC64() ? PPC::X31 : PPC::R31;
+
+  for (unsigned Reg = GPRBegin; Reg <= GPREnd; ++Reg) {
+    if (MRI.isPhysRegModified(Reg)) {
+      GPRSaved = GPREnd - Reg + 1;
+      break;
+    }
+  }
+
+  SecondHalfOfMandatoryField |= (GPRSaved << TracebackTable::GPRSavedShift) &
+                                TracebackTable::GPRSavedMask;
+
+  GENBOOLCOMMENT("", SecondHalfOfMandatoryField, HasVectorInfo);
+  GENBOOLCOMMENT(", ", SecondHalfOfMandatoryField, HasExtensionTable);
+  GENVALUECOMMENT(", NumOfGPRsSaved", SecondHalfOfMandatoryField, GPRSaved);
+  EmitComment();
+  OutStreamer->emitIntValueInHexWithPadding(
+      (SecondHalfOfMandatoryField & 0x00ff0000) >> 16, 1);
+
+  // Set the 7th byte of mandatory field.
+  uint32_t NumberOfFixedPara = FI->getFixedParamNum();
+  SecondHalfOfMandatoryField |=
+      (NumberOfFixedPara << TracebackTable::NumberOfFixedParmsShift) &
+      TracebackTable::NumberOfFixedParmsMask;
+  GENVALUECOMMENT("NumberOfFixedParms", SecondHalfOfMandatoryField,
+                  NumberOfFixedParms);
+  EmitComment();
+  OutStreamer->emitIntValueInHexWithPadding(
+      (SecondHalfOfMandatoryField & 0x0000ff00) >> 8, 1);
+
+  // Set the 8th byte of mandatory field.
+
+  // Always set parameter on stack.
+  SecondHalfOfMandatoryField |= TracebackTable::HasParmsOnStackMask;
+
+  uint32_t NumberOfFPPara = FI->getFloatingPointParamNum();
+  SecondHalfOfMandatoryField |=
+      (NumberOfFPPara << TracebackTable::NumberOfFloatingPointParmsShift) &
+      TracebackTable::NumberOfFloatingPointParmsMask;
+
+  GENVALUECOMMENT("NumberOfFPParms", SecondHalfOfMandatoryField,
+                  NumberOfFloatingPointParms);
+  GENBOOLCOMMENT(", ", SecondHalfOfMandatoryField, HasParmsOnStack);
+  EmitComment();
+  OutStreamer->emitIntValueInHexWithPadding(SecondHalfOfMandatoryField & 0xff,
+                                            1);
+
+  // Generate the optional fields of traceback table.
+
+  // Parameter type.
+  if (NumberOfFixedPara || NumberOfFPPara) {
+    assert((SecondHalfOfMandatoryField & TracebackTable::HasVectorInfoMask) ==
+               0 &&
+           "VectorInfo has not been implemented.");
+    uint32_t ParaType = FI->getParameterType();
+    CommentOS << "Parameter type = "
+              << XCOFF::parseParmsType(ParaType,
+                                       NumberOfFixedPara + NumberOfFPPara);
+    EmitComment();
+    OutStreamer->emitIntValueInHexWithPadding(ParaType, sizeof(ParaType));
+  }
+
+  // Traceback table offset.
+  OutStreamer->AddComment("Function size");
+  if (FirstHalfOfMandatoryField & TracebackTable::HasTraceBackTableOffsetMask) {
+    MCSymbol *FuncSectSym = getObjFileLowering().getFunctionEntryPointSymbol(
+        &(MF->getFunction()), TM);
+    OutStreamer->emitAbsoluteSymbolDiff(FuncEnd, FuncSectSym, 4);
+  }
+
+  // Since we unset the Int_Handler.
+  if (FirstHalfOfMandatoryField & TracebackTable::IsInterruptHandlerMask)
+    report_fatal_error("Hand_Mask not implement yet");
+
+  if (FirstHalfOfMandatoryField & TracebackTable::HasControlledStorageMask)
+    report_fatal_error("Ctl_Info not implement yet");
+
+  if (FirstHalfOfMandatoryField & TracebackTable::IsFunctionNamePresentMask) {
+    StringRef Name = MF->getName().substr(0, INT16_MAX);
+    int16_t NameLength = Name.size();
+    CommentOS << "Function name len = "
+              << static_cast<unsigned int>(NameLength);
+    EmitCommentAndValue(NameLength, 2);
+    OutStreamer->AddComment("Function Name");
+    OutStreamer->emitBytes(Name);
+  }
+
+  if (FirstHalfOfMandatoryField & TracebackTable::IsAllocaUsedMask) {
+    uint8_t AllocReg = XCOFF::AllocRegNo;
+    OutStreamer->AddComment("AllocaUsed");
+    OutStreamer->emitIntValueInHex(AllocReg, sizeof(AllocReg));
+  }
+
+  uint8_t ExtensionTableFlag = 0;
+  if (SecondHalfOfMandatoryField & TracebackTable::HasExtensionTableMask) {
+    if (ShouldEmitEHBlock)
+      ExtensionTableFlag |= ExtendedTBTableFlag::TB_EH_INFO;
+
+    CommentOS << "ExtensionTableFlag = "
+              << getExtendedTBTableFlagString(ExtensionTableFlag);
+    EmitCommentAndValue(ExtensionTableFlag, sizeof(ExtensionTableFlag));
+  }
+
+  if (ExtensionTableFlag & ExtendedTBTableFlag::TB_EH_INFO) {
+    auto &Ctx = OutStreamer->getContext();
+    MCSymbol *EHInfoSym =
+        TargetLoweringObjectFileXCOFF::getEHInfoTableSymbol(MF);
+    MCSymbol *TOCEntry = lookUpOrCreateTOCEntry(EHInfoSym);
+    const MCSymbol *TOCBaseSym =
+        cast<MCSectionXCOFF>(getObjFileLowering().getTOCBaseSection())
+            ->getQualNameSymbol();
+    const MCExpr *Exp =
+        MCBinaryExpr::createSub(MCSymbolRefExpr::create(TOCEntry, Ctx),
+                                MCSymbolRefExpr::create(TOCBaseSym, Ctx), Ctx);
+
+    const DataLayout &DL = getDataLayout();
+    OutStreamer->emitValueToAlignment(4);
+    OutStreamer->AddComment("EHInfo Table");
+    OutStreamer->emitValue(Exp, DL.getPointerSize());
+  }
+
+#undef GENBOOLCOMMENT
+#undef GENVALUECOMMENT
+}
+
 void PPCAIXAsmPrinter::ValidateGV(const GlobalVariable *GV) {
   // Early error checking limiting what is supported.
   if (GV->isThreadLocal())
@@ -1880,12 +2199,12 @@ void PPCAIXAsmPrinter::emitEndOfAsmFile(Module &M) {
   for (auto &I : TOC) {
     // Setup the csect for the current TC entry.
     MCSectionXCOFF *TCEntry = cast<MCSectionXCOFF>(
-        getObjFileLowering().getSectionForTOCEntry(I.first, TM));
+        getObjFileLowering().getSectionForTOCEntry(I.first.first, TM));
     OutStreamer->SwitchSection(TCEntry);
 
     OutStreamer->emitLabel(I.second);
     if (TS != nullptr)
-      TS->emitTCEntry(*I.first);
+      TS->emitTCEntry(*I.first.first);
   }
 }
 
@@ -1918,7 +2237,7 @@ bool PPCAIXAsmPrinter::doInitialization(Module &M) {
       // the sinit and sterm function names.
       if (FormatIndicatorAndUniqueModId.empty()) {
         std::string UniqueModuleId = getUniqueModuleId(&M);
-        if (UniqueModuleId.compare("") != 0)
+        if (UniqueModuleId != "")
           // TODO: Use source file full path to generate the unique module id
           // and add a format indicator as a part of function name in case we
           // will support more than one format.
@@ -2089,6 +2408,8 @@ createPPCAsmPrinterPass(TargetMachine &tm,
 // Force static initialization.
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializePowerPCAsmPrinter() {
   TargetRegistry::RegisterAsmPrinter(getThePPC32Target(),
+                                     createPPCAsmPrinterPass);
+  TargetRegistry::RegisterAsmPrinter(getThePPC32LETarget(),
                                      createPPCAsmPrinterPass);
   TargetRegistry::RegisterAsmPrinter(getThePPC64Target(),
                                      createPPCAsmPrinterPass);

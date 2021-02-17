@@ -35,6 +35,7 @@ namespace llvm {
 class DiagnosticPrinter;
 class Function;
 class Instruction;
+class InstructionCost;
 class LLVMContext;
 class Module;
 class SMDiagnostic;
@@ -380,7 +381,7 @@ public:
   /// Return a string with the location information for this diagnostic
   /// in the format "file:line:col". If location information is not available,
   /// it returns "<unknown>:0:0".
-  const std::string getLocationStr() const;
+  std::string getLocationStr() const;
 
   /// Return location information for this diagnostic in three parts:
   /// the relative source file path, line number and column.
@@ -437,6 +438,7 @@ public:
     Argument(StringRef Key, ElementCount EC);
     Argument(StringRef Key, bool B) : Key(Key), Val(B ? "true" : "false") {}
     Argument(StringRef Key, DebugLoc dl);
+    Argument(StringRef Key, InstructionCost C);
   };
 
   /// \p PassName is the name of the pass emitting this diagnostic. \p

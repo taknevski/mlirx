@@ -14,6 +14,7 @@
 #include "UsedDeclVisitor.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTDiagnostic.h"
+#include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclFriend.h"
 #include "clang/AST/DeclObjC.h"
@@ -120,8 +121,9 @@ public:
         }
 
         IncludeStack.push_back(IncludeLoc);
-        S->DiagnoseNonDefaultPragmaPack(
-            Sema::PragmaPackDiagnoseKind::NonDefaultStateAtInclude, IncludeLoc);
+        S->DiagnoseNonDefaultPragmaAlignPack(
+            Sema::PragmaAlignPackDiagnoseKind::NonDefaultStateAtInclude,
+            IncludeLoc);
       }
       break;
     }
@@ -130,8 +132,8 @@ public:
         if (llvm::timeTraceProfilerEnabled())
           llvm::timeTraceProfilerEnd();
 
-        S->DiagnoseNonDefaultPragmaPack(
-            Sema::PragmaPackDiagnoseKind::ChangedStateAtExit,
+        S->DiagnoseNonDefaultPragmaAlignPack(
+            Sema::PragmaAlignPackDiagnoseKind::ChangedStateAtExit,
             IncludeStack.pop_back_val());
       }
       break;
@@ -157,7 +159,8 @@ Sema::Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
       OriginalLexicalContext(nullptr), MSStructPragmaOn(false),
       MSPointerToMemberRepresentationMethod(
           LangOpts.getMSPointerToMemberRepresentationMethod()),
-      VtorDispStack(LangOpts.getVtorDispMode()), PackStack(0),
+      VtorDispStack(LangOpts.getVtorDispMode()),
+      AlignPackStack(AlignPackInfo(getLangOpts().XLPragmaPack)),
       DataSegStack(nullptr), BSSSegStack(nullptr), ConstSegStack(nullptr),
       CodeSegStack(nullptr), FpPragmaStack(FPOptionsOverride()),
       CurInitSeg(nullptr), VisContext(nullptr),
@@ -295,7 +298,7 @@ void Sema::Initialize() {
   // core features.
   if (getLangOpts().OpenCL) {
     getOpenCLOptions().addSupport(
-        Context.getTargetInfo().getSupportedOpenCLOpts());
+        Context.getTargetInfo().getSupportedOpenCLOpts(), getLangOpts());
     getOpenCLOptions().enableSupportedCore(getLangOpts());
     addImplicitTypedef("sampler_t", Context.OCLSamplerTy);
     addImplicitTypedef("event_t", Context.OCLEventTy);
@@ -372,8 +375,13 @@ void Sema::Initialize() {
   }
 
   if (Context.getTargetInfo().getTriple().isPPC64() &&
-      Context.getTargetInfo().hasFeature("mma")) {
-#define PPC_MMA_VECTOR_TYPE(Name, Id, Size) \
+      Context.getTargetInfo().hasFeature("paired-vector-memops")) {
+    if (Context.getTargetInfo().hasFeature("mma")) {
+#define PPC_VECTOR_MMA_TYPE(Name, Id, Size) \
+      addImplicitTypedef(#Name, Context.Id##Ty);
+#include "clang/Basic/PPCTypes.def"
+    }
+#define PPC_VECTOR_VSX_TYPE(Name, Id, Size) \
     addImplicitTypedef(#Name, Context.Id##Ty);
 #include "clang/Basic/PPCTypes.def"
   }
@@ -390,6 +398,9 @@ void Sema::Initialize() {
 }
 
 Sema::~Sema() {
+  assert(InstantiatingSpecializations.empty() &&
+         "failed to clean up an InstantiatingTemplate?");
+
   if (VisContext) FreeVisContext();
 
   // Kill all the active scopes.
@@ -525,6 +536,13 @@ void Sema::diagnoseZeroToNullptrConversion(CastKind Kind, const Expr* E) {
   if (Kind != CK_NullToPointer && Kind != CK_NullToMemberPointer)
     return;
   if (E->IgnoreParenImpCasts()->getType()->isNullPtrType())
+    return;
+
+  // Don't diagnose the conversion from a 0 literal to a null pointer argument
+  // in a synthesized call to operator<=>.
+  if (!CodeSynthesisContexts.empty() &&
+      CodeSynthesisContexts.back().Kind ==
+          CodeSynthesisContext::RewritingOperatorAsSpaceship)
     return;
 
   // If it is a macro from system header, and if the macro name is not "NULL",
@@ -1030,7 +1048,7 @@ void Sema::ActOnEndOfTranslationUnit() {
     }
   }
 
-  DiagnoseUnterminatedPragmaPack();
+  DiagnoseUnterminatedPragmaAlignPack();
   DiagnoseUnterminatedPragmaAttribute();
 
   // All delayed member exception specs should be checked or we end up accepting
@@ -1723,11 +1741,12 @@ Sema::SemaDiagnosticBuilder::~SemaDiagnosticBuilder() {
   }
 }
 
-Sema::SemaDiagnosticBuilder Sema::targetDiag(SourceLocation Loc,
-                                             unsigned DiagID) {
+Sema::SemaDiagnosticBuilder
+Sema::targetDiag(SourceLocation Loc, unsigned DiagID, FunctionDecl *FD) {
+  FD = FD ? FD : getCurFunctionDecl();
   if (LangOpts.OpenMP)
-    return LangOpts.OpenMPIsDevice ? diagIfOpenMPDeviceCode(Loc, DiagID)
-                                   : diagIfOpenMPHostCode(Loc, DiagID);
+    return LangOpts.OpenMPIsDevice ? diagIfOpenMPDeviceCode(Loc, DiagID, FD)
+                                   : diagIfOpenMPHostCode(Loc, DiagID, FD);
   if (getLangOpts().CUDA)
     return getLangOpts().CUDAIsDevice ? CUDADiagIfDeviceCode(Loc, DiagID)
                                       : CUDADiagIfHostCode(Loc, DiagID);
@@ -1736,7 +1755,7 @@ Sema::SemaDiagnosticBuilder Sema::targetDiag(SourceLocation Loc,
     return SYCLDiagIfDeviceCode(Loc, DiagID);
 
   return SemaDiagnosticBuilder(SemaDiagnosticBuilder::K_Immediate, Loc, DiagID,
-                               getCurFunctionDecl(), *this);
+                               FD, *this);
 }
 
 Sema::SemaDiagnosticBuilder Sema::Diag(SourceLocation Loc, unsigned DiagID,
@@ -1755,15 +1774,14 @@ Sema::SemaDiagnosticBuilder Sema::Diag(SourceLocation Loc, unsigned DiagID,
                                  DiagID, getCurFunctionDecl(), *this);
   }
 
-  SemaDiagnosticBuilder DB =
-      getLangOpts().CUDAIsDevice
-          ? CUDADiagIfDeviceCode(Loc, DiagID)
-          : CUDADiagIfHostCode(Loc, DiagID);
+  SemaDiagnosticBuilder DB = getLangOpts().CUDAIsDevice
+                                 ? CUDADiagIfDeviceCode(Loc, DiagID)
+                                 : CUDADiagIfHostCode(Loc, DiagID);
   SetIsLastErrorImmediate(DB.isImmediate());
   return DB;
 }
 
-void Sema::checkDeviceDecl(const ValueDecl *D, SourceLocation Loc) {
+void Sema::checkDeviceDecl(ValueDecl *D, SourceLocation Loc) {
   if (isUnevaluatedContext())
     return;
 
@@ -1781,9 +1799,22 @@ void Sema::checkDeviceDecl(const ValueDecl *D, SourceLocation Loc) {
         return;
   }
 
+  // Try to associate errors with the lexical context, if that is a function, or
+  // the value declaration otherwise.
+  FunctionDecl *FD =
+      isa<FunctionDecl>(C) ? cast<FunctionDecl>(C) : dyn_cast<FunctionDecl>(D);
   auto CheckType = [&](QualType Ty) {
     if (Ty->isDependentType())
       return;
+
+    if (Ty->isExtIntType()) {
+      if (!Context.getTargetInfo().hasExtIntType()) {
+        targetDiag(Loc, diag::err_device_unsupported_type, FD)
+            << D << false /*show bit size*/ << 0 /*bitsize*/
+            << Ty << Context.getTargetInfo().getTriple().str();
+      }
+      return;
+    }
 
     if ((Ty->isFloat16Type() && !Context.getTargetInfo().hasFloat16Type()) ||
         ((Ty->isFloat128Type() ||
@@ -1791,10 +1822,12 @@ void Sema::checkDeviceDecl(const ValueDecl *D, SourceLocation Loc) {
          !Context.getTargetInfo().hasFloat128Type()) ||
         (Ty->isIntegerType() && Context.getTypeSize(Ty) == 128 &&
          !Context.getTargetInfo().hasInt128Type())) {
-      targetDiag(Loc, diag::err_device_unsupported_type)
-          << D << static_cast<unsigned>(Context.getTypeSize(Ty)) << Ty
-          << Context.getTargetInfo().getTriple().str();
-      targetDiag(D->getLocation(), diag::note_defined_here) << D;
+      if (targetDiag(Loc, diag::err_device_unsupported_type, FD)
+          << D << true /*show bit size*/
+          << static_cast<unsigned>(Context.getTypeSize(Ty)) << Ty
+          << Context.getTargetInfo().getTriple().str())
+        D->setInvalidDecl();
+      targetDiag(D->getLocation(), diag::note_defined_here, FD) << D;
     }
   };
 
@@ -1806,6 +1839,8 @@ void Sema::checkDeviceDecl(const ValueDecl *D, SourceLocation Loc) {
       CheckType(ParamTy);
     CheckType(FPTy->getReturnType());
   }
+  if (const auto *FNPTy = dyn_cast<FunctionNoProtoType>(Ty))
+    CheckType(FNPTy->getReturnType());
 }
 
 /// Looks through the macro-expansion chain for the given

@@ -34,7 +34,9 @@ class GpuAsyncRegionPass : public GpuAsyncRegionPassBase<GpuAsyncRegionPass> {
 };
 } // namespace
 
-static bool isTerminator(Operation *op) { return !op->isKnownNonTerminator(); }
+static bool isTerminator(Operation *op) {
+  return op->mightHaveTrait<OpTrait::IsTerminator>();
+}
 static bool hasSideEffects(Operation *op) {
   return !MemoryEffectOpInterface::hasNoEffect(op);
 }
@@ -78,6 +80,8 @@ private:
     if (op->getNumRegions() > 0)
       return op->emitOpError("regions are not supported");
 
+    auto tokenType = builder.getType<gpu::AsyncTokenType>();
+
     // If there is no current token, insert a `gpu.wait async` without
     // dependencies to create one.
     if (!currentToken)
@@ -85,18 +89,19 @@ private:
     asyncOp.addAsyncDependency(currentToken);
 
     // Clone the op to return a token in addition to the other results.
-    SmallVector<Type, 1> resultTypes = {tokenType};
+    SmallVector<Type, 1> resultTypes;
     resultTypes.reserve(1 + op->getNumResults());
     copy(op->getResultTypes(), std::back_inserter(resultTypes));
+    resultTypes.push_back(tokenType);
     auto *newOp = Operation::create(op->getLoc(), op->getName(), resultTypes,
-                                    op->getOperands(), op->getMutableAttrDict(),
+                                    op->getOperands(), op->getAttrDictionary(),
                                     op->getSuccessors());
 
     // Replace the op with the async clone.
     auto results = newOp->getResults();
-    currentToken = results.front();
+    currentToken = results.back();
     builder.insert(newOp);
-    op->replaceAllUsesWith(results.drop_front());
+    op->replaceAllUsesWith(results.drop_back());
     op->erase();
 
     return success();
@@ -107,7 +112,7 @@ private:
   }
 
   OpBuilder builder;
-  const Type tokenType = builder.getType<gpu::AsyncTokenType>();
+
   // The token that represents the current asynchronous dependency. It's valid
   // range starts with a `gpu.wait async` op, and ends with a `gpu.wait` op.
   // In between, each gpu::AsyncOpInterface depends on the current token and
@@ -140,7 +145,7 @@ struct GpuAsyncRegionPass::DeferWaitCallback {
   ~DeferWaitCallback() {
     for (size_t i = 0; i < worklist.size(); ++i) {
       auto waitOp = worklist[i];
-      auto executeOp = waitOp.getParentOfType<async::ExecuteOp>();
+      auto executeOp = waitOp->getParentOfType<async::ExecuteOp>();
       auto numDependencies = waitOp.asyncDependencies().size();
 
       // Erase `gpu.wait` and return async dependencies from region instead.
@@ -165,7 +170,14 @@ private:
     // Construct new result type list with `count` additional types.
     SmallVector<Type, 2> resultTypes;
     resultTypes.reserve(numResults);
-    copy(executeOp.getResultTypes(), std::back_inserter(resultTypes));
+    transform(executeOp.getResultTypes(), std::back_inserter(resultTypes),
+              [](Type type) {
+                // Extract value type from !async.value.
+                if (auto valueType = type.dyn_cast<async::ValueType>())
+                  return valueType.getValueType();
+                assert(type.isa<async::TokenType>() && "expected token type");
+                return type;
+              });
     OpBuilder builder(executeOp);
     auto tokenType = builder.getType<gpu::AsyncTokenType>();
     resultTypes.resize(numResults, tokenType);
@@ -266,7 +278,7 @@ void GpuAsyncRegionPass::runOnFunction() {
           .wasInterrupted())
     return signalPassFailure();
 
-  // Collect gpu.wait ops that we can move out of gpu.execute regions.
+  // Collect gpu.wait ops that we can move out of async.execute regions.
   getFunction().getRegion().walk(DeferWaitCallback());
 }
 

@@ -322,16 +322,6 @@ Value *CallBase::getReturnedArgOperand() const {
   return nullptr;
 }
 
-bool CallBase::hasRetAttr(Attribute::AttrKind Kind) const {
-  if (Attrs.hasAttribute(AttributeList::ReturnIndex, Kind))
-    return true;
-
-  // Look at the callee, if available.
-  if (const Function *F = getCalledFunction())
-    return F->getAttributes().hasAttribute(AttributeList::ReturnIndex, Kind);
-  return false;
-}
-
 /// Determine whether the argument or parameter has the given attribute.
 bool CallBase::paramHasAttr(unsigned ArgNo, Attribute::AttrKind Kind) const {
   assert(ArgNo < getNumArgOperands() && "Param index out of bounds!");
@@ -410,7 +400,7 @@ CallBase::BundleOpInfo &CallBase::getBundleOpInfoForOperand(unsigned OpIdx) {
 
   bundle_op_iterator Begin = bundle_op_info_begin();
   bundle_op_iterator End = bundle_op_info_end();
-  bundle_op_iterator Current;
+  bundle_op_iterator Current = Begin;
 
   while (Begin != End) {
     unsigned ScaledOperandPerBundle =
@@ -432,6 +422,35 @@ CallBase::BundleOpInfo &CallBase::getBundleOpInfoForOperand(unsigned OpIdx) {
   assert(OpIdx >= Current->Begin && OpIdx < Current->End &&
          "the operand bundle doesn't cover every value in the range");
   return *Current;
+}
+
+CallBase *CallBase::addOperandBundle(CallBase *CB, uint32_t ID,
+                                     OperandBundleDef OB,
+                                     Instruction *InsertPt) {
+  if (CB->getOperandBundle(ID))
+    return CB;
+
+  SmallVector<OperandBundleDef, 1> Bundles;
+  CB->getOperandBundlesAsDefs(Bundles);
+  Bundles.push_back(OB);
+  return Create(CB, Bundles, InsertPt);
+}
+
+CallBase *CallBase::removeOperandBundle(CallBase *CB, uint32_t ID,
+                                        Instruction *InsertPt) {
+  SmallVector<OperandBundleDef, 1> Bundles;
+  bool CreateNew = false;
+
+  for (unsigned I = 0, E = CB->getNumOperandBundles(); I != E; ++I) {
+    auto Bundle = CB->getOperandBundleAt(I);
+    if (Bundle.getTagID() == ID) {
+      CreateNew = true;
+      continue;
+    }
+    Bundles.emplace_back(Bundle);
+  }
+
+  return CreateNew ? Create(CB, Bundles, InsertPt) : CB;
 }
 
 //===----------------------------------------------------------------------===//
@@ -3022,8 +3041,8 @@ CastInst *CastInst::CreatePointerCast(Value *S, Type *Ty,
          "Invalid cast");
   assert(Ty->isVectorTy() == S->getType()->isVectorTy() && "Invalid cast");
   assert((!Ty->isVectorTy() ||
-          cast<FixedVectorType>(Ty)->getNumElements() ==
-              cast<FixedVectorType>(S->getType())->getNumElements()) &&
+          cast<VectorType>(Ty)->getElementCount() ==
+              cast<VectorType>(S->getType())->getElementCount()) &&
          "Invalid cast");
 
   if (Ty->isIntOrIntVectorTy())
@@ -3041,8 +3060,8 @@ CastInst *CastInst::CreatePointerCast(Value *S, Type *Ty,
          "Invalid cast");
   assert(Ty->isVectorTy() == S->getType()->isVectorTy() && "Invalid cast");
   assert((!Ty->isVectorTy() ||
-          cast<FixedVectorType>(Ty)->getNumElements() ==
-              cast<FixedVectorType>(S->getType())->getNumElements()) &&
+          cast<VectorType>(Ty)->getElementCount() ==
+              cast<VectorType>(S->getType())->getElementCount()) &&
          "Invalid cast");
 
   if (Ty->isIntOrIntVectorTy())
@@ -3735,29 +3754,6 @@ ICmpInst::Predicate ICmpInst::getUnsignedPredicate(Predicate pred) {
   }
 }
 
-CmpInst::Predicate CmpInst::getFlippedStrictnessPredicate(Predicate pred) {
-  switch (pred) {
-    default: llvm_unreachable("Unknown or unsupported cmp predicate!");
-    case ICMP_SGT: return ICMP_SGE;
-    case ICMP_SLT: return ICMP_SLE;
-    case ICMP_SGE: return ICMP_SGT;
-    case ICMP_SLE: return ICMP_SLT;
-    case ICMP_UGT: return ICMP_UGE;
-    case ICMP_ULT: return ICMP_ULE;
-    case ICMP_UGE: return ICMP_UGT;
-    case ICMP_ULE: return ICMP_ULT;
-
-    case FCMP_OGT: return FCMP_OGE;
-    case FCMP_OLT: return FCMP_OLE;
-    case FCMP_OGE: return FCMP_OGT;
-    case FCMP_OLE: return FCMP_OLT;
-    case FCMP_UGT: return FCMP_UGE;
-    case FCMP_ULT: return FCMP_ULE;
-    case FCMP_UGE: return FCMP_UGT;
-    case FCMP_ULE: return FCMP_ULT;
-  }
-}
-
 CmpInst::Predicate CmpInst::getSwappedPredicate(Predicate pred) {
   switch (pred) {
     default: llvm_unreachable("Unknown cmp predicate!");
@@ -3788,18 +3784,93 @@ CmpInst::Predicate CmpInst::getSwappedPredicate(Predicate pred) {
   }
 }
 
+bool CmpInst::isNonStrictPredicate(Predicate pred) {
+  switch (pred) {
+  case ICMP_SGE:
+  case ICMP_SLE:
+  case ICMP_UGE:
+  case ICMP_ULE:
+  case FCMP_OGE:
+  case FCMP_OLE:
+  case FCMP_UGE:
+  case FCMP_ULE:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool CmpInst::isStrictPredicate(Predicate pred) {
+  switch (pred) {
+  case ICMP_SGT:
+  case ICMP_SLT:
+  case ICMP_UGT:
+  case ICMP_ULT:
+  case FCMP_OGT:
+  case FCMP_OLT:
+  case FCMP_UGT:
+  case FCMP_ULT:
+    return true;
+  default:
+    return false;
+  }
+}
+
+CmpInst::Predicate CmpInst::getStrictPredicate(Predicate pred) {
+  switch (pred) {
+  case ICMP_SGE:
+    return ICMP_SGT;
+  case ICMP_SLE:
+    return ICMP_SLT;
+  case ICMP_UGE:
+    return ICMP_UGT;
+  case ICMP_ULE:
+    return ICMP_ULT;
+  case FCMP_OGE:
+    return FCMP_OGT;
+  case FCMP_OLE:
+    return FCMP_OLT;
+  case FCMP_UGE:
+    return FCMP_UGT;
+  case FCMP_ULE:
+    return FCMP_ULT;
+  default:
+    return pred;
+  }
+}
+
 CmpInst::Predicate CmpInst::getNonStrictPredicate(Predicate pred) {
   switch (pred) {
-  case ICMP_SGT: return ICMP_SGE;
-  case ICMP_SLT: return ICMP_SLE;
-  case ICMP_UGT: return ICMP_UGE;
-  case ICMP_ULT: return ICMP_ULE;
-  case FCMP_OGT: return FCMP_OGE;
-  case FCMP_OLT: return FCMP_OLE;
-  case FCMP_UGT: return FCMP_UGE;
-  case FCMP_ULT: return FCMP_ULE;
-  default: return pred;
+  case ICMP_SGT:
+    return ICMP_SGE;
+  case ICMP_SLT:
+    return ICMP_SLE;
+  case ICMP_UGT:
+    return ICMP_UGE;
+  case ICMP_ULT:
+    return ICMP_ULE;
+  case FCMP_OGT:
+    return FCMP_OGE;
+  case FCMP_OLT:
+    return FCMP_OLE;
+  case FCMP_UGT:
+    return FCMP_UGE;
+  case FCMP_ULT:
+    return FCMP_ULE;
+  default:
+    return pred;
   }
+}
+
+CmpInst::Predicate CmpInst::getFlippedStrictnessPredicate(Predicate pred) {
+  assert(CmpInst::isRelational(pred) && "Call only with relational predicate!");
+
+  if (isStrictPredicate(pred))
+    return getNonStrictPredicate(pred);
+  if (isNonStrictPredicate(pred))
+    return getStrictPredicate(pred);
+
+  llvm_unreachable("Unknown predicate!");
 }
 
 CmpInst::Predicate CmpInst::getSignedPredicate(Predicate pred) {

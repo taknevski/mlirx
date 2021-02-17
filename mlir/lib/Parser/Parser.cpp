@@ -94,6 +94,24 @@ ParseResult Parser::parseToken(Token::Kind expectedToken,
   return emitError(message);
 }
 
+/// Parse an optional integer value from the stream.
+OptionalParseResult Parser::parseOptionalInteger(uint64_t &result) {
+  Token curToken = getToken();
+  if (curToken.isNot(Token::integer, Token::minus))
+    return llvm::None;
+
+  bool negative = consumeIf(Token::minus);
+  Token curTok = getToken();
+  if (parseToken(Token::integer, "expected integer value"))
+    return failure();
+
+  auto val = curTok.getUInt64IntegerValue();
+  if (!val)
+    return emitError(curTok.getLoc(), "integer value too large");
+  result = negative ? -*val : *val;
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // OperationParser
 //===----------------------------------------------------------------------===//
@@ -790,7 +808,7 @@ Operation *OperationParser::parseGenericOperation() {
   if (getToken().is(Token::l_square)) {
     // Check if the operation is a known terminator.
     const AbstractOperation *abstractOp = result.name.getAbstractOperation();
-    if (abstractOp && !abstractOp->hasProperty(OperationProperty::Terminator))
+    if (abstractOp && !abstractOp->hasTrait<OpTrait::IsTerminator>())
       return emitError("successors in non-terminator"), nullptr;
 
     SmallVector<Block *, 2> successors;
@@ -1109,6 +1127,11 @@ public:
     return success(parser.consumeIf(Token::star));
   }
 
+  /// Parse an optional integer value from the stream.
+  OptionalParseResult parseOptionalInteger(uint64_t &result) override {
+    return parser.parseOptionalInteger(result);
+  }
+
   //===--------------------------------------------------------------------===//
   // Attribute Parsing
   //===--------------------------------------------------------------------===//
@@ -1425,7 +1448,7 @@ public:
 
     // Try to parse the region.
     assert((!enableNameShadowing ||
-            opDefinition->hasProperty(OperationProperty::IsolatedFromAbove)) &&
+            opDefinition->hasTrait<OpTrait::IsIsolatedFromAbove>()) &&
            "name shadowing is only allowed on isolated regions");
     if (parser.parseRegion(region, regionArguments, enableNameShadowing))
       return failure();

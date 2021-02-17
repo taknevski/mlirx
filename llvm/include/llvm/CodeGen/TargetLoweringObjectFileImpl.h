@@ -21,6 +21,7 @@ namespace llvm {
 
 class GlobalValue;
 class MachineModuleInfo;
+class MachineFunction;
 class MCContext;
 class MCExpr;
 class MCSection;
@@ -35,7 +36,6 @@ class TargetLoweringObjectFileELF : public TargetLoweringObjectFile {
 protected:
   MCSymbolRefExpr::VariantKind PLTRelativeVariantKind =
       MCSymbolRefExpr::VK_None;
-  const TargetMachine *TM = nullptr;
 
 public:
   TargetLoweringObjectFileELF();
@@ -63,7 +63,7 @@ public:
 
   MCSection *getSectionForJumpTable(const Function &F,
                                     const TargetMachine &TM) const override;
-  MCSection *getSectionForLSDA(const Function &F,
+  MCSection *getSectionForLSDA(const Function &F, const MCSymbol &FnSym,
                                const TargetMachine &TM) const override;
 
   MCSection *
@@ -219,6 +219,10 @@ class TargetLoweringObjectFileXCOFF : public TargetLoweringObjectFile {
 public:
   TargetLoweringObjectFileXCOFF() = default;
   ~TargetLoweringObjectFileXCOFF() override = default;
+
+  static bool ShouldEmitEHBlock(const MachineFunction *MF);
+
+  static MCSymbol *getEHInfoTableSymbol(const MachineFunction *MF);
 
   void Initialize(MCContext &Ctx, const TargetMachine &TM) override;
 

@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CODEGEN_TARGETLOWERINGOBJECTFILE_H
-#define LLVM_CODEGEN_TARGETLOWERINGOBJECTFILE_H
+#ifndef LLVM_TARGET_TARGETLOWERINGOBJECTFILE_H
+#define LLVM_TARGET_TARGETLOWERINGOBJECTFILE_H
 
 #include "llvm/MC/MCObjectFileInfo.h"
 #include <cstdint>
@@ -63,6 +63,8 @@ protected:
   /// This section contains the static destructor pointer list.
   MCSection *StaticDtorSection = nullptr;
 
+  const TargetMachine *TM = nullptr;
+
 public:
   TargetLoweringObjectFile() = default;
   TargetLoweringObjectFile(const TargetLoweringObjectFile &) = delete;
@@ -82,6 +84,9 @@ public:
 
   /// Emit the module-level metadata that the platform cares about.
   virtual void emitModuleMetadata(MCStreamer &Streamer, Module &M) const {}
+
+  /// Emit Call Graph Profile metadata.
+  void emitCGProfileMetadata(MCStreamer &Streamer, Module &M) const;
 
   /// Get the module-level metadata that the platform cares about.
   virtual void getModuleMetadata(Module &M) {}
@@ -120,8 +125,8 @@ public:
 
   virtual MCSection *getSectionForJumpTable(const Function &F,
                                             const TargetMachine &TM) const;
-  virtual MCSection *getSectionForLSDA(const Function &F,
-                                       const TargetMachine &TM) const {
+  virtual MCSection *getSectionForLSDA(const Function &, const MCSymbol &,
+                                       const TargetMachine &) const {
     return LSDASection;
   }
 
@@ -273,4 +278,4 @@ protected:
 
 } // end namespace llvm
 
-#endif // LLVM_CODEGEN_TARGETLOWERINGOBJECTFILE_H
+#endif // LLVM_TARGET_TARGETLOWERINGOBJECTFILE_H
