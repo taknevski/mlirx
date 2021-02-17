@@ -1084,6 +1084,21 @@ Type ConvertToLLVMPattern::getElementPtrType(MemRefType type) const {
   return LLVM::LLVMPointerType::get(structElementType, type.getMemorySpace());
 }
 
+
+// Check if the MemRefType `type` is supported by the lowering. We currently
+// only support memrefs with identity maps.
+bool ConvertToLLVMPattern::isSupportedMemRefType(MemRefType type) const {
+  if (!typeConverter->convertType(type.getElementType()))
+    return false;
+  return type.getAffineMaps().empty() ||
+         llvm::all_of(type.getAffineMaps(),
+                      [](AffineMap map) { return map.isIdentity(); });
+}
+
+
+
+
+
 void ConvertToLLVMPattern::getMemRefDescriptorSizes(
     Location loc, MemRefType memRefType, ValueRange dynamicSizes,
     ConversionPatternRewriter &rewriter, SmallVectorImpl<Value> &sizes,
@@ -2463,7 +2478,7 @@ struct MemRefShapeCastOpLowering
     Location loc = op->getLoc();
     MemRefDescriptor memRefDescriptor =
         MemRefDescriptor::undef(rewriter, loc, targetStructType);
-    LLVM::LLVMType targetElementPtrType = memRefDescriptor.getElementPtrType();
+    Type targetElementPtrType = memRefDescriptor.getElementPtrType();
 
     Value srcBuffer = srcMemRefDesc.allocatedPtr(rewriter, loc);
     Value targetBuffer = rewriter.create<LLVM::BitcastOp>(

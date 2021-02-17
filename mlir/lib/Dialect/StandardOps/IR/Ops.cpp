@@ -2485,27 +2485,7 @@ OpFoldResult RankOp::fold(ArrayRef<Attribute> operands) {
 //===----------------------------------------------------------------------===//
 
 static LogicalResult verify(ReturnOp op) {
-<<<<<<< HEAD
-  auto *parentOp = op.getParentOp();
-  if (!parentOp)
-    return op.emitOpError("has no parent op");
-
-  // The operand count and types must be consisntent with the parent op. When
-  // the parent is a FuncOp (which is declarative), check against its return
-  // types; for the rest, check again the number of actual SSA results.
-  SmallVector<Type, 4> retTypes;
-  auto funcOp = dyn_cast<FuncOp>(parentOp);
-  if (funcOp) {
-    retTypes.assign(funcOp.getType().getResults().begin(),
-                    funcOp.getType().getResults().end());
-  } else {
-    retTypes.reserve(parentOp->getNumResults());
-    for (auto result : parentOp->getResults())
-      retTypes.push_back(result.getType());
-  }
-=======
   auto function = cast<FuncOp>(op->getParentOp());
->>>>>>> llvm
 
   if (op.getNumOperands() != retTypes.size())
     return op.emitOpError("has ")

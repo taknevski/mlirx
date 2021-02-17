@@ -225,18 +225,7 @@ static Error compileAndExecute(Options &options, ModuleOp module,
 
   auto expectedEngine = mlir::ExecutionEngine::create(
       module, config.llvmModuleBuilder, config.transformer, jitCodeGenOptLevel,
-<<<<<<< HEAD
-      libs);
-
-  double tLapsed = rtclock() - tStart;
-  if (options.time) {
-    std::stringstream msg;
-    msg << std::setprecision(6) << "Compilation time: " << tLapsed << "s\n";
-    llvm::errs() << msg.str();
-  }
-=======
       executionEngineLibs);
->>>>>>> llvm
   if (!expectedEngine)
     return expectedEngine.takeError();
 
