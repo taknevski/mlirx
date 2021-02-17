@@ -1452,45 +1452,6 @@ def ExecuteRegionOp : Std_Op<"execute_region"> {
   let hasFolder = 0;
 }
 
-//===----------------------------------------------------------------------===//
-// TensorFromElementsOp
-//===----------------------------------------------------------------------===//
-
-def TensorFromElementsOp : Std_Op<"tensor_from_elements", [
-    NoSideEffect,
-    TypesMatchWith<"operand types match result element type",
-                   "result", "elements", "SmallVector<Type, 2>("
-                   "$_self.cast<ShapedType>().getDimSize(0), "
-                   "$_self.cast<ShapedType>().getElementType())">
-  ]> {
-  string summary = "tensor from elements operation.";
-  string description = [{
-    Create a 1D tensor from a range of same-type arguments.
-
-    Example:
-
-    ```mlir
-    tensor_from_elements(i_1, ..., i_N) :  tensor<Nxindex>
-    ```
-  }];
-
-  let arguments = (ins Variadic<AnyType>:$elements);
-  let results = (outs 1DTensorOf<[AnyType]>:$result);
-
-  let assemblyFormat = "$elements attr-dict `:` type($result)";
-
-  // This op is fully verified by its traits.
-  let verifier = ?;
-
-  let skipDefaultBuilders = 1;
-  let builders = [
-    OpBuilderDAG<(ins "Type":$elementType, "ValueRange":$elements)>,
-    // Special case builder for when `elements` has size >=1.
-    OpBuilderDAG<(ins "ValueRange":$elements)>
-  ];
-
-  let hasCanonicalizer = 1;
-}
 
 //===----------------------------------------------------------------------===//
 // FPExtOp
