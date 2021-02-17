@@ -367,7 +367,6 @@ public:
   }
 };
 
-<<<<<<< HEAD
 class AffineExecuteRegionOpLowering
     : public OpRewritePattern<AffineExecuteRegionOp> {
 public:
@@ -408,7 +407,6 @@ public:
     return success();
   }
 };
-=======
 /// Returns the identity value associated with an AtomicRMWKind op.
 static Value getIdentityValue(AtomicRMWKind op, OpBuilder &builder,
                               Location loc) {
@@ -449,7 +447,6 @@ static Value getReductionOp(AtomicRMWKind op, OpBuilder &builder, Location loc,
   }
   return nullptr;
 }
->>>>>>> llvm
 
 /// Convert an `affine.parallel` (loop nest) operation into a `scf.parallel`
 /// operation.
