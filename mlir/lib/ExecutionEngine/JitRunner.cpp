@@ -246,7 +246,6 @@ static Error compileAndExecute(Options &options, ModuleOp module,
   tStart = rtclock();
   for (unsigned i = 0; i < options.reps; ++i)
     (*fptr)(args);
-  tLapsed = rtclock() - tStart;
   if (options.time) {
     std::stringstream msg;
     msg << std::setprecision(6)
