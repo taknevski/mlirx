@@ -89,7 +89,7 @@ static AffineForOp getByPolyName(AffineForOp root, StringRef polyName) {
   const char *kPolyCodeGenAttrName = "poly_codegen_name";
   AffineForOp res;
   root.walk([&](AffineForOp forOp) {
-    auto stringAttr = forOp.getAttrOfType<StringAttr>(kPolyCodeGenAttrName);
+    auto stringAttr = forOp->getAttrOfType<StringAttr>(kPolyCodeGenAttrName);
     if (!stringAttr)
       return WalkResult::advance();
     auto forOpCodegenName = stringAttr.getValue();
@@ -212,14 +212,14 @@ void HigherOrderPolyhedralOpt::optimizeMatmul(AffineForOp rootMatmulNest,
     // FIXME: you don't need to set alignment if these are already vector
     // memrefs.
     cast<AllocOp>(lhsBuf.getDefiningOp())
-        .setAttr(AllocOp::getAlignmentAttrName(),
+        ->setAttr(AllocOp::getAlignmentAttrName(),
                  builder.getI64IntegerAttr(32));
     // The rhsL3buf could sometimes just be the original memref / func arg.
     if (auto rhsAllocOp = rhsL3Buf.getDefiningOp())
       rhsAllocOp->setAttr(AllocOp::getAlignmentAttrName(),
                           builder.getI64IntegerAttr(32));
     cast<AllocOp>(rhsL1Buf.getDefiningOp())
-        .setAttr(AllocOp::getAlignmentAttrName(),
+        ->setAttr(AllocOp::getAlignmentAttrName(),
                  builder.getI64IntegerAttr(32));
   }
 

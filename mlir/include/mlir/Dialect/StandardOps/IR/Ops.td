@@ -1980,7 +1980,7 @@ def MemRefShapeCastOp : Std_Op<"memref_shape_cast", [NoSideEffect]> {
     return printStandardCastOp(this->getOperation(), p);
   }];
 
-  let verifier = [{ return impl::verifyCastOp(*this); }];
+  let verifier = [{ return impl::verifyCastOp(*this, areCastCompatible);}];
 
   let extraClassDeclaration = [{
     /// Return true if `a` and `b` are valid operand and result pairs for
