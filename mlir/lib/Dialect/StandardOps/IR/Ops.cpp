@@ -2480,27 +2480,33 @@ OpFoldResult RankOp::fold(ArrayRef<Attribute> operands) {
   return IntegerAttr();
 }
 
+
+
 //===----------------------------------------------------------------------===//
 // ReturnOp
 //===----------------------------------------------------------------------===//
-
+ 
 static LogicalResult verify(ReturnOp op) {
   auto function = cast<FuncOp>(op->getParentOp());
-
-  if (op.getNumOperands() != retTypes.size())
+ 
+  // The operand number and types must match the function signature.
+  const auto &results = function.getType().getResults();
+  if (op.getNumOperands() != results.size())
     return op.emitOpError("has ")
-           << op.getNumOperands() << " operands, but enclosing op returns "
-           << retTypes.size();
-
-  for (unsigned i = 0, e = retTypes.size(); i != e; ++i)
-    if (op.getOperand(i).getType() != retTypes[i])
-      return op.emitError() << "type of return operand " << i << " ("
-                            << op.getOperand(i).getType()
-                            << ") doesn't match enclosing op result type ("
-                            << retTypes[i] << ")";
-
+           << op.getNumOperands() << " operands, but enclosing function (@"
+           << function.getName() << ") returns " << results.size();
+ 
+  for (unsigned i = 0, e = results.size(); i != e; ++i)
+    if (op.getOperand(i).getType() != results[i])
+      return op.emitError()
+             << "type of return operand " << i << " ("
+             << op.getOperand(i).getType()
+             << ") doesn't match function result type (" << results[i] << ")"
+             << " in function @" << function.getName();
+ 
   return success();
 }
+
 
 //===----------------------------------------------------------------------===//
 // SelectOp
