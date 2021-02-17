@@ -3478,7 +3478,7 @@ LogicalResult mlir::loopVectorize(AffineForOp forOp, unsigned simdWidth,
   AffineForOp::getCanonicalizationPatterns(patterns, context);
   AffineLoadOp::getCanonicalizationPatterns(patterns, context);
   AffineStoreOp::getCanonicalizationPatterns(patterns, context);
-  applyPatternsAndFoldGreedily(forOp.getParentOfType<FuncOp>(),
+  applyPatternsAndFoldGreedily(forOp.getOperation()->getParentOfType<FuncOp>(),
                                std::move(patterns));
 
   if (vecMemRefMap)

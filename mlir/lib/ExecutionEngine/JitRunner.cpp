@@ -242,17 +242,7 @@ static Error compileAndExecute(Options &options, ModuleOp module,
                                  : options.objectFilename);
 
   void (*fptr)(void **) = *expectedFPtr;
-
-  tStart = rtclock();
-  for (unsigned i = 0; i < options.reps; ++i)
-    (*fptr)(args);
-  if (options.time) {
-    std::stringstream msg;
-    msg << std::setprecision(6)
-        << "Total execution time: " << tLapsed << "s\n";
-    llvm::errs() << msg.str();
-  }
-
+  (*fptr)(args);
   // Run all dynamic library destroy callbacks to prepare for the shutdown.
   llvm::for_each(destroyFns, [](MlirRunnerDestroyFn destroy) { destroy(); });
 

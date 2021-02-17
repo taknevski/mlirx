@@ -2182,7 +2182,7 @@ LogicalResult verify(AffineLoadOp op) {
     return op.emitOpError("result type must match element type of memref");
 
   if (failed(verifyMemoryOpIndexing(
-          op.getOperation(),
+          op,//op.getOperation(),
           op->getAttrOfType<AffineMapAttr>(op.getMapAttrName()),
           op.getMapOperands(), memrefType,
           /*numIndexOperands=*/op.getNumOperands() - 1)))
@@ -2271,7 +2271,7 @@ LogicalResult verify(AffineStoreOp op) {
         "first operand must have same type memref element type");
 
   if (failed(verifyMemoryOpIndexing(
-          op.getOperation(),
+          op,//op.getOperation(),
           op->getAttrOfType<AffineMapAttr>(op.getMapAttrName()),
           op.getMapOperands(), memrefType,
           /*numIndexOperands=*/op.getNumOperands() - 2)))
@@ -2633,8 +2633,7 @@ static void print(OpAsmPrinter &p, AffineExecuteRegionOp op) {
 
   SmallVector<Type, 4> argTypes(op.getOperandTypes());
   p << " : "
-    << FunctionType::get(argTypes, op.getResultTypes(),
-                         op.getOperation()->getContext());
+    << FunctionType::get(op.getOperation()->getContext(),argTypes, op.getResultTypes());
 
   p.printRegion(op.region(),
                 /*printEntryBlockArgs=*/false,
@@ -3136,7 +3135,7 @@ static LogicalResult verifyVectorMemoryOp(Operation *op, MemRefType memrefType,
 static LogicalResult verify(AffineVectorLoadOp op) {
   MemRefType memrefType = op.getMemRefType();
   if (failed(verifyMemoryOpIndexing(
-          op.getOperation(),
+          op,//op.getOperation(),
           op->getAttrOfType<AffineMapAttr>(op.getMapAttrName()),
           op.getMapOperands(), memrefType,
           /*numIndexOperands=*/op.getNumOperands() - 1)))
@@ -3214,7 +3213,7 @@ static void print(OpAsmPrinter &p, AffineVectorStoreOp op) {
 static LogicalResult verify(AffineVectorStoreOp op) {
   MemRefType memrefType = op.getMemRefType();
   if (failed(verifyMemoryOpIndexing(
-          op.getOperation(),
+          op,//op.getOperation(),
           op->getAttrOfType<AffineMapAttr>(op.getMapAttrName()),
           op.getMapOperands(), memrefType,
           /*numIndexOperands=*/op.getNumOperands() - 2)))
