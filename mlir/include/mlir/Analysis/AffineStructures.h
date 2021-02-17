@@ -60,12 +60,13 @@ class FlatAffineConstraints {
 public:
   enum IdKind { Dimension, Symbol, Local };
 
+
   /// Constructs a constraint system reserving memory for the specified number
   /// of constraints and identifiers..
   FlatAffineConstraints(unsigned numReservedInequalities,
                         unsigned numReservedEqualities,
-                        unsigned numReservedCols, unsigned numDims,
-                        unsigned numSymbols, unsigned numLocals = 0,
+                        unsigned numReservedCols, unsigned numDims = 0,
+                        unsigned numSymbols = 0, unsigned numLocals = 0,
                         ArrayRef<Optional<Value>> idArgs = {})
       : numReservedCols(numReservedCols), numDims(numDims),
         numSymbols(numSymbols) {
@@ -81,11 +82,11 @@ public:
       ids.append(idArgs.begin(), idArgs.end());
   }
 
-  FlatAffineConstraints() : FlatAffineConstraints(0, 0) {}
+
 
   /// Constructs a constraint system with the specified number of
   /// dimensions and symbols.
-  FlatAffineConstraints(unsigned numDims, unsigned numSymbols,
+  FlatAffineConstraints(unsigned numDims = 0, unsigned numSymbols = 0,
                         unsigned numLocals = 0,
                         ArrayRef<Optional<Value>> idArgs = {})
       : numReservedCols(numDims + numSymbols + numLocals + 1), numDims(numDims),
@@ -108,11 +109,9 @@ public:
   }
 
   /// Create a flat affine constraint system from an AffineValueMap or a list of
-  /// these. The constructed system will only include equalities corresponding
-  /// to the map's results and other constraints connecting dimensions and
-  /// symbols to local variables if any.
+  /// these. The constructed system will only include equalities.
   explicit FlatAffineConstraints(const AffineValueMap &avm);
-
+  explicit FlatAffineConstraints(ArrayRef<const AffineValueMap *> avmRef);
   /// Creates an affine constraint system from an IntegerSet.
   explicit FlatAffineConstraints(IntegerSet set);
 
