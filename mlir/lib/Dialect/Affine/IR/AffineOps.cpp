@@ -388,15 +388,9 @@ bool mlir::isValidSymbol(Value value, Region *region) {
   auto *defOp = value.getDefiningOp();
   if (!defOp) {
     // A block argument that is not a top-level value is a valid symbol if it
-<<<<<<< HEAD
-    // dominates region's parent op. `region` should not be isolated from above
-    // for that symbol to pass in.
-    if (region && !region->getParentOp()->isKnownIsolatedFromAbove())
-=======
     // dominates region's parent op.
     Operation *regionOp = region ? region->getParentOp() : nullptr;
     if (regionOp && !regionOp->hasTrait<OpTrait::IsIsolatedFromAbove>())
->>>>>>> llvm
       if (auto *parentOpRegion = region->getParentOp()->getParentRegion())
         return isValidSymbol(value, parentOpRegion);
     return false;
@@ -2188,13 +2182,8 @@ LogicalResult verify(AffineLoadOp op) {
     return op.emitOpError("result type must match element type of memref");
 
   if (failed(verifyMemoryOpIndexing(
-<<<<<<< HEAD
-          op,
-          op.getAttrOfType<AffineMapAttr>(op.getMapAttrName()),
-=======
           op.getOperation(),
           op->getAttrOfType<AffineMapAttr>(op.getMapAttrName()),
->>>>>>> llvm
           op.getMapOperands(), memrefType,
           /*numIndexOperands=*/op.getNumOperands() - 1)))
     return failure();
@@ -2282,13 +2271,8 @@ LogicalResult verify(AffineStoreOp op) {
         "first operand must have same type memref element type");
 
   if (failed(verifyMemoryOpIndexing(
-<<<<<<< HEAD
-          op,
-          op.getAttrOfType<AffineMapAttr>(op.getMapAttrName()),
-=======
           op.getOperation(),
           op->getAttrOfType<AffineMapAttr>(op.getMapAttrName()),
->>>>>>> llvm
           op.getMapOperands(), memrefType,
           /*numIndexOperands=*/op.getNumOperands() - 2)))
     return failure();
@@ -3152,13 +3136,8 @@ static LogicalResult verifyVectorMemoryOp(Operation *op, MemRefType memrefType,
 static LogicalResult verify(AffineVectorLoadOp op) {
   MemRefType memrefType = op.getMemRefType();
   if (failed(verifyMemoryOpIndexing(
-<<<<<<< HEAD
-          op,
-          op.getAttrOfType<AffineMapAttr>(op.getMapAttrName()),
-=======
           op.getOperation(),
           op->getAttrOfType<AffineMapAttr>(op.getMapAttrName()),
->>>>>>> llvm
           op.getMapOperands(), memrefType,
           /*numIndexOperands=*/op.getNumOperands() - 1)))
     return failure();
@@ -3235,13 +3214,8 @@ static void print(OpAsmPrinter &p, AffineVectorStoreOp op) {
 static LogicalResult verify(AffineVectorStoreOp op) {
   MemRefType memrefType = op.getMemRefType();
   if (failed(verifyMemoryOpIndexing(
-<<<<<<< HEAD
-          op,
-          op.getAttrOfType<AffineMapAttr>(op.getMapAttrName()),
-=======
           op.getOperation(),
           op->getAttrOfType<AffineMapAttr>(op.getMapAttrName()),
->>>>>>> llvm
           op.getMapOperands(), memrefType,
           /*numIndexOperands=*/op.getNumOperands() - 2)))
     return failure();
